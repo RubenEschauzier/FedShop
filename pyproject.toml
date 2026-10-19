@@ -48,6 +48,7 @@ fedshop-engine-hibiscus = "fedshop.engines.hibiscus:cli"
 fedshop-engine-odyssey = "fedshop.engines.odyssey:cli"
 fedshop-engine-fedup = "fedshop.engines.fedup:cli"
 fedshop-engine-rsa = "fedshop.engines.rsa:cli"
+fedshop-discovery = "fedshop.discovery.cli:cli"
 
 [build-system]
 requires = ["hatchling"]

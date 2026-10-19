@@ -1,0 +1,27 @@
+PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+PREFIX rev: <http://purl.org/stuff/rev#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX fs: <http://fedshop.example.org/vocab#>
+
+# FedShop q02: the details of one product, with its producer and feature labels.
+# Specs come from the brand, labels of features from the taxonomy; shops may hold stale cached specs.
+SELECT DISTINCT ?label ?comment ?producer ?featureLabel ?propertyTextual1 ?propertyTextual2 ?propertyTextual3 ?propertyNumeric1 ?propertyNumeric2 ?propertyTextual4 ?propertyTextual5 ?propertyNumeric4 WHERE {
+    <{{Product}}> rdfs:label ?label .
+    <{{Product}}> rdfs:comment ?comment .
+    <{{Product}}> bsbm:producer ?p .
+    ?p rdfs:label ?producer .
+    <{{Product}}> bsbm:productFeature ?f .
+    ?f rdfs:label ?featureLabel .
+    <{{Product}}> bsbm:productPropertyTextual1 ?propertyTextual1 .
+    <{{Product}}> bsbm:productPropertyTextual2 ?propertyTextual2 .
+    <{{Product}}> bsbm:productPropertyTextual3 ?propertyTextual3 .
+    <{{Product}}> bsbm:productPropertyNumeric1 ?propertyNumeric1 .
+    <{{Product}}> bsbm:productPropertyNumeric2 ?propertyNumeric2 .
+    OPTIONAL { <{{Product}}> bsbm:productPropertyTextual4 ?propertyTextual4 . }
+    OPTIONAL { <{{Product}}> bsbm:productPropertyTextual5 ?propertyTextual5 . }
+    OPTIONAL { <{{Product}}> bsbm:productPropertyNumeric4 ?propertyNumeric4 . }
+}

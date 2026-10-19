@@ -1,0 +1,6 @@
+{
+  "name": "fedshop-discovery-css",
+  "private": true,
+  "description": "Community Solid Server that serves the discovery benchmark's documents",
+  "dependencies": { "@solid/community-server": "7.2.0" }
+}

@@ -1,0 +1,22 @@
+PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+PREFIX rev: <http://purl.org/stuff/rev#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX fs: <http://fedshop.example.org/vocab#>
+
+# FedShop q10: cheap, fast, current offers for a product from vendors in a country.
+SELECT DISTINCT ?offer ?price WHERE {
+    ?listing fs:listingOf <{{Product}}> .
+    ?offer bsbm:product ?listing .
+    ?offer bsbm:vendor ?vendor .
+    ?vendor bsbm:country <{{Country}}> .
+    ?offer bsbm:deliveryDays ?deliveryDays .
+    FILTER (?deliveryDays <= {{days}})
+    ?offer bsbm:price ?price .
+    ?offer bsbm:validTo ?date .
+    FILTER (?date > "{{date}}"^^xsd:dateTime)
+}
+ORDER BY xsd:double(str(?price))

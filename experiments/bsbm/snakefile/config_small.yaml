@@ -1,5 +1,8 @@
+use_docker: true
 generation:
   workdir: "experiments/bsbm"
+  datafiles: "${get_data_files: ${generation.workdir}, ${generation.schema.vendor.params.vendor_n}, ${generation.schema.ratingsite.params.ratingsite_n}}"
+  datafiles_batch0: "${get_data_files: ${generation.workdir}, 10, 10}"
   n_batch: 2
   n_query_instances: 2
   verbose: true
@@ -15,6 +18,13 @@ generation:
   virtuoso:
     compose_file: "${generation.workdir}/docker/virtuoso.yml"
     service_name: "bsbm-virtuoso"
+    isql: "/Applications/Virtuoso Open Source Edition v7.2.app/Contents/virtuoso-opensource/bin/isql" # Skip if use docker
+    data_dir: "${generation.workdir}/model/dataset"
+    port: 8890
+    default_url: "http://localhost:${generation.virtuoso.port}"
+    default_endpoint: "${generation.virtuoso.default_url}/sparql"
+    batch_members: "${get_batch_members:${generation.n_batch}}"
+    federation_members: "${get_federation_members:${generation.n_batch}, ${generation.schema.vendor.params.vendor_n}, ${generation.schema.ratingsite.params.ratingsite_n}}"
     endpoints: "${get_docker_endpoints: ${generation.virtuoso.compose_file}, ${generation.virtuoso.service_name}}" 
     container_names: "${get_virtuoso_containers: ${generation.virtuoso.compose_file}, ${generation.virtuoso.service_name}}" 
   schema:
@@ -28,7 +38,7 @@ generation:
       export_output_dir: "${generation.workdir}/model/tmp/product"
       params:
         # type
-        product_n: 20000
+        product_n: 200   # matches the full config: ~1 offer and ~5 reviews per product (was 20000)
         producer_n: "${get_product_producer_n: ${generation.schema.product.params.product_n}}"
         feature_n: "${get_product_feature_n: ${generation.schema.product.params.product_n}}"
         #feature_c: "${get_product_feature_c: ${generation.schema.product.params.product_n}}"
@@ -93,11 +103,13 @@ evaluation:
   proxy: 
     compose_file: "${generation.workdir}/docker/proxy.yml"
     service_name: "fedshop-proxy"
-    endpoint: "http://localhost:5555/"
+    host: "localhost"
+    port: 5555
+    endpoint: "http://${evaluation.proxy.host}:${evaluation.proxy.port}/"
     container_name: "docker-fedshop-proxy-1"
   engines:
     fedx:
-     dir: "engines/FedX/target"
+     dir: "engines/FedX"
     # costfed:
     #  dir: "engines/CostFed"
     # splendid:
@@ -109,8 +121,57 @@ evaluation:
     #   dir: "engines/ANAPSID"
     rsa:
      dir: "engines/ARQ"
+     fedup_dir: "engines/fedup"
      internal_endpoint_prefix: "http://localhost:8890/sparql/?default-graph-uri="
      compose_file: "${generation.workdir}/docker/jena.yml"
      service_name: "jena-fuseki"
      endpoint: "http://localhost:3030/FedShop/query"
      container_name: "docker-jena-fuseki-1"
+
+# Discovery-based variant (fedshop-discovery, see experiments/bsbm/discovery/README.md)
+discovery:
+  workdir: "${generation.workdir}/benchmark/discovery-small"   # outputs; the full config uses benchmark/discovery
+  base_url: "http://localhost:3000/"   # every owner's namespace is <base_url><owner>/ (served by CSS)
+  classical:                     # shops and review sites in the catalog the engine starts from (the taxonomy is always in it)
+    ratio: 0.5                   # stratified over shops and review sites
+    seed: 42
+  members:                       # shops and review sites, generated with FedShop's templates against the brand catalog
+    shops: 20
+    review_sites: 20
+    pool: 200                    # products shops and review sites deal in: the catalog's first ones
+    offers: 20                   # FedShop's average offers per shop (normal_dist avg; FedShop small: 20, full: 2000)
+    reviews: 100                 # FedShop's average reviews per review site (small: 100, full: 10000); reviewers = reviews / 20
+    seed: 42
+  brands:                        # producers own their products; never in the catalog, always discovered
+    products: 20000              # products in all brand catalogs together (more than members.pool)
+    count: 40
+    zipf: 0.8                    # brand size ~ rank^-zipf: a few big brands, a moderate long tail
+    min_products: 20
+    service_share: 0.25          # the largest brands (this share) run a query service; the rest is lookup-only
+    seed: 42
+  links:                         # rdfs:seeAlso between listings of the same product: peers per listing, or "all"
+    reviews: 2                   # shop listing -> review site pages
+    where_to_buy: 3              # review site page -> shop listings
+    also_reviewed: 0             # review site page -> other review site pages
+    brand_where_to_buy: 2        # brand product -> shop listings
+    brand_reviews: 2             # brand product -> review site pages
+    seed: 42
+  replicas:                      # shops and review sites caching a brand's spec sheet under the brand's IRI
+    share: 0.25                  # listings that carry a cached spec
+    stale: 0.3                   # cached specs whose numeric values are out of date
+    seed: 42
+  virtuoso:                      # one container for every owner's query service, next to FedShop's own containers
+    compose_file: "${generation.workdir}/discovery/docker/virtuoso.yml"
+    container: fedshop-discovery-virtuoso
+    isql_port: 1112
+    http_port: 8891
+    first_service_port: 34300
+  css:
+    port: 3000
+    config: "${generation.workdir}/discovery/css-config.json"
+  workload:
+    per_template: 5
+    max_candidates: 40
+    max_rows: 100000
+    gain_min: 10                 # templates built around a brand star keep instances whose star saves this factor at its service
+    seed: 42
