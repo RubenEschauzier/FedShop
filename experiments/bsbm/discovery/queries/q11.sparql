@@ -7,12 +7,17 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q11: everything said about an offer.
+# FedShop q11: everything my shop says about one of its offers. A control: my shop's service answers it alone.
+# kind: control
+# rows: 1-50
+# discovered: 0
 SELECT DISTINCT ?property ?hasValue ?isValueOf WHERE {
-    <{{Offer}}> bsbm:product ?product .
-    {
-    <{{Offer}}> ?property ?hasValue .
-    } UNION {
-    ?isValueOf ?property <{{Offer}}> .
+    SERVICE <{{Shop}}> {
+        <{{Offer}}> bsbm:product ?product .
+        {
+        <{{Offer}}> ?property ?hasValue .
+        } UNION {
+        ?isValueOf ?property <{{Offer}}> .
+        }
     }
 }

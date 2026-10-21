@@ -7,15 +7,19 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q02: the details of one product, with its producer and feature labels.
-# Specs come from the brand, labels of features from the taxonomy; shops may hold stale cached specs.
+# FedShop q02: the details of one product, with its producer and feature labels (from the taxonomy's service).
+# kind: lookup
+# rows: 3-100
+# discovered: 1
 SELECT DISTINCT ?label ?comment ?producer ?featureLabel ?propertyTextual1 ?propertyTextual2 ?propertyTextual3 ?propertyNumeric1 ?propertyNumeric2 ?propertyTextual4 ?propertyTextual5 ?propertyNumeric4 WHERE {
     <{{Product}}> rdfs:label ?label .
     <{{Product}}> rdfs:comment ?comment .
     <{{Product}}> bsbm:producer ?p .
     ?p rdfs:label ?producer .
     <{{Product}}> bsbm:productFeature ?f .
-    ?f rdfs:label ?featureLabel .
+    SERVICE <{{Taxonomy}}> {
+        ?f rdfs:label ?featureLabel .
+    }
     <{{Product}}> bsbm:productPropertyTextual1 ?propertyTextual1 .
     <{{Product}}> bsbm:productPropertyTextual2 ?propertyTextual2 .
     <{{Product}}> bsbm:productPropertyTextual3 ?propertyTextual3 .

@@ -7,7 +7,8 @@ type it deals with, linked to a global BSBM IRI with owl:sameAs. Here:
 - the taxonomy owns product types, product features and countries;
 - a shop owns its vendor record, its offers and one listing per product it sells;
 - a review site owns its record, its reviews and one page per product it reviews;
-- a reviewer owns their profile (moved out of the review site).
+- a reviewer owns their profile (moved out of the review site), which lists the reviews they wrote
+  with `foaf:made`, at whichever review site.
 
 A listing (or review page) keeps FedShop's local product IRI but no longer repeats the product:
 it says `fs:listingOf <brand product>`. Offers and reviews point to the listing, as in FedShop.
@@ -20,8 +21,22 @@ Some listings carry a cached copy of the brand's spec sheet: triples whose subje
 product, held by the shop or review site. Some of those copies are stale. Under the claims of the
 brands' query services they are dropped; for lookup-only brands nobody claims them.
 
+Documents get triples that let a traversal engine follow the query (cMatch: a triple matching a
+query pattern leads to the IRIs in it). They are copies of triples the owner already has, placed
+in a second document of the same owner, so the owners' data and services don't change:
+
+- a listing's document repeats `<offer> bsbm:product <listing>` of each of its offers, and a
+  review page's document `<review> bsbm:reviewFor <page>` of each of its reviews;
+- a brand has a category page per product type it makes (<brand>/types/ProductTypeN) repeating
+  `<product> rdf:type <type>` of its products of that type, and the taxonomy's type links to the
+  brands' pages with rdfs:seeAlso (these links are the taxonomy's own triples).
+- a brand's own record (<brand>/ProducerN) repeats `<product> bsbm:producer <record>` of each of
+  its products, as a brand's catalog page lists its range.
+
 Everything is written as one N-Triples file per owner (data/<owner>.nt, plus
-data/<owner>.replicas.nt for cached specs), with the IRIs the documents are served at.
+data/<owner>.replicas.nt for cached specs), with the IRIs the documents are served at. Triples
+placed in a document other than their subject's (cached specs, the copies above) are written to
+placements.nq, with that document as graph.
 """
 import csv
 import json
@@ -38,6 +53,8 @@ GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
 LOCAL = re.compile(r"^([A-Za-z]+)(\d+)$")
 NUMERIC = [f"{BSBM}productPropertyNumeric{i}" for i in range(1, 6)]
 DC_PUBLISHER = "http://purl.org/dc/elements/1.1/publisher"
+REV_REVIEWER = "http://purl.org/stuff/rev#reviewer"
+FOAF_MADE = "http://xmlns.com/foaf/0.1/made"
 LISTING_OF = f"{FS}listingOf"
 LISTING = f"{FS}Listing"
 DIRECTIONS = {  # (from kind, to kind) -> links setting
@@ -103,6 +120,8 @@ class Ownership:
         self.data = defaultdict(list)          # owner -> N-Triples lines
         self.replicas = defaultdict(list)      # owner -> N-Triples lines of cached specs
         self.replica_docs = []                 # {owner, doc, product, stale, triples}
+        self.placements = []                   # N-Quads lines: a triple and the document it is also placed in
+        self.categories = defaultdict(set)     # type IRI -> brands with a category page for it
         self.listings = defaultdict(dict)      # product number -> {owner: listing IRI}
         self.countries = set()
         self.reviewer_iri = {}                 # (site, local Person name) -> reviewer IRI
@@ -181,6 +200,14 @@ class Ownership:
                 self.listings[n][member] = listing[1:-1]
                 self.data[member].append(nt(listing, f"<{RDF_TYPE}>", f"<{LISTING}>"))
                 self.data[member].append(nt(listing, f"<{LISTING_OF}>", f"<{self.product_iri(n)}>"))
+
+    def build_reviewer_links(self):
+        """A reviewer's profile lists the reviews they wrote: `<reviewer> foaf:made <review>`."""
+        for site in (m for m in self.members if kind_of(m) == "ratingsite"):
+            for line in self.data[site]:
+                review, p, reviewer = line[:-3].split(" ", 2)
+                if p == f"<{REV_REVIEWER}>":
+                    self.data[reviewer[1:-1].split("/")[-2]].append(nt(reviewer, f"<{FOAF_MADE}>", review))
 
     def spec(self, n):
         """The brand's triples for product n."""
@@ -268,6 +295,34 @@ class Ownership:
                 self.replica_docs.append({"owner": member, "doc": listing, "product": self.product_iri(n),
                                           "stale": is_stale, "triples": "".join(triples)})
 
+    def build_placements(self):
+        """Triples also placed in another document of their owner: cached specs, copies for traversal."""
+        def place(line, doc):
+            self.placements.append(f"{line[:-3]} <{doc}> .\n")
+
+        for d in self.replica_docs:
+            for line in d["triples"].splitlines(keepends=True):
+                place(line, d["doc"])
+        backlinks = (f"<{BSBM}product>", f"<{BSBM}reviewFor>")
+        for member in self.members:
+            for line in self.data[member]:
+                s, p, o = line[:-3].split(" ", 2)
+                if p in backlinks:
+                    place(line, o[1:-1])
+        taxonomy = self.dconf.ns("taxonomy")
+        for brand in range(self.catalog.count):
+            name = self.brand_name(brand)
+            for line in self.data[name]:
+                s, p, o = line[:-3].split(" ", 2)
+                if p == f"<{BSBM}producer>":
+                    place(line, o[1:-1])
+                elif p == f"<{RDF_TYPE}>" and o.startswith(f"<{taxonomy}ProductType"):
+                    place(line, f"{self.dconf.ns(name)}types/{o[len(taxonomy) + 1:-1]}")
+                    self.categories[o[1:-1]].add(name)
+        for type_iri, brands in sorted(self.categories.items()):
+            for name in sorted(brands, key=number):
+                self.data["taxonomy"].append(nt(f"<{type_iri}>", f"<{SEEALSO}>", f"<{self.dconf.ns(name)}types/{type_iri[len(taxonomy):]}>"))
+
     # ----- owners -----
     def owners(self):
         dconf = self.dconf
@@ -295,10 +350,12 @@ class Ownership:
     def build(self):
         self.build_reviewers()
         self.build_members()
+        self.build_reviewer_links()
         self.build_brands()
         self.build_taxonomy()
         self.build_links()
         self.build_replicas()
+        self.build_placements()
         return self.owners()
 
 
@@ -312,6 +369,8 @@ def write(dconf, own, owners):
             Path(data_dir, f"{name}.replicas.nt").write_text("".join(sorted(set(own.replicas[name]))))
     Path(dconf.path("owners.json")).write_text(json.dumps(owners, indent=2))
     Path(dconf.path("replicas.json")).write_text(json.dumps(own.replica_docs, indent=1))
+    Path(dconf.path("placements.nq")).write_text("".join(sorted(set(own.placements))))
+    Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(own.categories.items())}, indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
         writer = csv.writer(fs, delimiter="\t")
         writer.writerow(["product", "owner", "from", "peer", "to"])
@@ -337,6 +396,7 @@ def run(dconf):
     summary = {"owners": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in own.listings.values()), "listed_products": len(own.listings),
                "links": len(own.links), "cached_specs": len(own.replica_docs),
-               "stale_cached_specs": sum(d["stale"] for d in own.replica_docs)}
+               "stale_cached_specs": sum(d["stale"] for d in own.replica_docs),
+               "placed_triples": len(own.placements), "category_pages": sum(len(b) for b in own.categories.values())}
     LOGGER.info(json.dumps(summary))
     return summary

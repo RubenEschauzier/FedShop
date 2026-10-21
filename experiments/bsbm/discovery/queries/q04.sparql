@@ -7,22 +7,20 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q04: products matching either of two feature combinations.
-# Here: among the products some shop sells.
+# FedShop q04: products matching either of two combinations (here: two types, each with its own numeric bound), among those offered somewhere.
+# kind: analytical
+# rows: 20-400
+# discovered: 2
 SELECT DISTINCT ?product ?label ?propertyTextual WHERE {
     {
     ?product rdfs:label ?label .
-    ?product rdf:type <{{ProductType}}> .
-    ?product bsbm:productFeature <{{ProductFeature1}}> .
-    ?product bsbm:productFeature <{{ProductFeature2}}> .
+    ?product rdf:type <{{ProductType1}}> .
     ?product bsbm:productPropertyTextual1 ?propertyTextual .
     ?product bsbm:productPropertyNumeric1 ?p1 .
     FILTER (?p1 > {{x}})
     } UNION {
     ?product rdfs:label ?label .
-    ?product rdf:type <{{ProductType}}> .
-    ?product bsbm:productFeature <{{ProductFeature1}}> .
-    ?product bsbm:productFeature <{{ProductFeature3}}> .
+    ?product rdf:type <{{ProductType2}}> .
     ?product bsbm:productPropertyTextual1 ?propertyTextual .
     ?product bsbm:productPropertyNumeric2 ?p2 .
     FILTER (?p2 > {{y}})
@@ -30,4 +28,3 @@ SELECT DISTINCT ?product ?label ?propertyTextual WHERE {
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
 }
-ORDER BY ?label

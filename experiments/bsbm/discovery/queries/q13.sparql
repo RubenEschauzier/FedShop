@@ -7,11 +7,15 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# Offers for other products of the same brand as a given product.
-SELECT DISTINCT ?product ?offer ?price WHERE {
+# The rest of a brand's range: its other products, with their offers at any shop.
+# kind: analytical
+# rows: 20-400
+# discovered: 3
+SELECT DISTINCT ?product ?label ?offer ?price WHERE {
     <{{Product}}> bsbm:producer ?producer .
     ?product bsbm:producer ?producer .
     FILTER (?product != <{{Product}}>)
+    ?product rdfs:label ?label .
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
     ?offer bsbm:price ?price .

@@ -7,7 +7,10 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q08: the English reviews of a product, newest first, with their reviewers.
+# FedShop q08: the English reviews of a product at every review site, with their reviewers.
+# kind: product
+# rows: 10-150
+# discovered: 3
 SELECT DISTINCT ?title ?text ?reviewDate ?reviewer ?reviewerName ?rating1 ?rating2 ?rating3 ?rating4 WHERE {
     ?page fs:listingOf <{{Product}}> .
     ?review bsbm:reviewFor ?page .
@@ -22,4 +25,3 @@ SELECT DISTINCT ?title ?text ?reviewDate ?reviewer ?reviewerName ?rating1 ?ratin
     OPTIONAL { ?review bsbm:rating3 ?rating3 . }
     OPTIONAL { ?review bsbm:rating4 ?rating4 . }
 }
-ORDER BY DESC(?reviewDate)

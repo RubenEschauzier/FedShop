@@ -2,6 +2,8 @@
 
 The query is rewritten so that every triple pattern sits in its own `GRAPH ?gN { ... }`, and run
 over every owner's graph. Each derivation then tells which owner's graph supplied each pattern.
+A pattern inside `SERVICE <endpoint> { ... }` is pinned to the graph of that endpoint's owner, and
+admits whatever that service holds: a SERVICE clause asks one source what it has.
 
 Claims. Every owner with a query service (a composite) claims its namespace: the triples whose
 subject is in it. A triple is admitted from the graph that holds it if that graph is its subject's
@@ -10,15 +12,18 @@ about a brand's product are therefore dropped when the brand runs a service, and
 lookup-only brands. The claim semantics (paper, Def. 10) is the reference answer; the union
 semantics (every triple admitted) is computed alongside to show which answers claims change.
 
-Reachability. Discovery starts at the catalog (the classical owners). In each round the values
+Reachability. Discovery starts at the owners whose services the query names (or, for a query
+without SERVICE clauses, at the catalog). In each round the values
 the query binds lead further: its constants, and the terms of patterns supplied by reached owners.
 An IRI in an owner's namespace leads to that owner (dereference it; the storage root names the
 service, if any). A brand product leads, through the rdfs:seeAlso links of reached listings and of
 the brand itself, to the other owners' listings of that product. A solution is reachable if some
 admitted derivation only uses reached owners.
 """
+import json
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from rdflib.plugins.sparql.algebra import translateQuery, traverse
 from rdflib.plugins.sparql.parser import parseQuery
@@ -26,6 +31,7 @@ from rdflib.plugins.sparql.parser import parseQuery
 from .common import sparql_csv
 
 TERM = re.compile(r'<[^>]*>|"(?:[^"\\]|\\.)*"(?:\^\^<[^>]*>|\^\^\S+|@[\w-]+)?|\S+')
+SERVICE_OPEN = re.compile(r"^SERVICE\s*<([^>]+)>\s*\{$", re.I)
 SKIP = re.compile(r"^\s*(PREFIX|SELECT|WHERE|FILTER|ORDER|LIMIT|OFFSET|#|\}|\{|UNION)", re.I)
 MODIFIERS = re.compile(r"^\s*(ORDER\s+BY|LIMIT|OFFSET).*$", re.M | re.I)
 
@@ -46,8 +52,13 @@ def _count_patterns(query):
     def visit(node):
         if getattr(node, "name", None) == "BGP":
             count[0] += len(node.triples)
-    traverse(translateQuery(parseQuery(query)).algebra, visitPre=visit)
+    traverse(translateQuery(parseQuery(re.sub(r"SERVICE\s*<", "GRAPH <", query, flags=re.I))).algebra, visitPre=visit)
     return count[0]
+
+
+def service_endpoints(query):
+    """The endpoints the query's SERVICE clauses name, in order."""
+    return list(dict.fromkeys(re.findall(r"SERVICE\s*<([^>]+)>", query, re.I)))
 
 
 def admit_filter(subject, graph, claimed_regex):
@@ -55,15 +66,18 @@ def admit_filter(subject, graph, claimed_regex):
     return f'(STRSTARTS(STR({subject}), STR({graph})) || !REGEX(STR({subject}), "{claimed_regex}"))'
 
 
-def rewrite(query, claimed_regex=None, keep_projection=False):
+def rewrite(query, claimed_regex=None, keep_projection=False, services=None):
     """Wrap each triple pattern of a one-pattern-per-line query in its own GRAPH clause.
 
-    With claimed_regex, each pattern only matches triples admitted under claims. Returns
+    With claimed_regex, each pattern only matches triples admitted under claims. A SERVICE block
+    becomes a plain group whose patterns are pinned to the graph services[endpoint]. Returns
     (query, projection, patterns) where patterns[i] = (s, p, o) for ?g{i+1}. Unless keep_projection,
     the query selects DISTINCT * without solution modifiers (every derivation).
     """
     prefixes = dict(re.findall(r"PREFIX\s+(\w*):\s*<([^>]*)>", query, re.I))
+    services = services or {}
     patterns, out = [], []
+    groups = []   # per open group: the graph a SERVICE block pins its patterns to, or None
 
     def wrap(text):
         terms = [_expand(t, prefixes) for t in TERM.findall(text.strip().rstrip(".").strip())]
@@ -72,15 +86,31 @@ def rewrite(query, claimed_regex=None, keep_projection=False):
         patterns.append(tuple(terms))
         g = f"?g{len(patterns)}"
         block = f"GRAPH {g} {{ {' '.join(terms)} . }}"
+        pinned = next((ns for ns in reversed(groups) if ns), None)
+        if pinned:
+            return f"{{ {block} FILTER ({g} = <{pinned}>) }}"
         return f"{{ {block} FILTER {admit_filter(terms[0], g, claimed_regex)} }}" if claimed_regex else block
 
     for line in query.splitlines():
         s = line.strip()
+        service = SERVICE_OPEN.match(s)
         m = re.match(r"^OPTIONAL\s*\{\s*(.+?)\s*\.?\s*\}\s*$", s, re.I)
-        if m:
+        if service:
+            if service.group(1) not in services:
+                raise ValueError(f"SERVICE <{service.group(1)}> is not an owner's endpoint")
+            groups.append(services[service.group(1)])
+            out.append(line[:len(line) - len(line.lstrip())] + "{")
+        elif m:
             out.append(f"OPTIONAL {{ {wrap(m.group(1))} }}")
-        elif (s and not SKIP.match(s) and not re.match(r"^OPTIONAL\s*\{\s*$", s, re.I)
-              and len(TERM.findall(s.rstrip("."))) == 3 and s.endswith(".")):
+        elif s.endswith("{"):
+            if s.startswith("}"):
+                groups.pop()
+            groups.append(None)
+            out.append(line)
+        elif s.startswith("}"):
+            groups.pop()
+            out.append(line)
+        elif s and not SKIP.match(s) and len(TERM.findall(s.rstrip("."))) == 3 and s.endswith("."):
             out.append(wrap(s))
         else:
             out.append(line)
@@ -97,9 +127,9 @@ def rewrite(query, claimed_regex=None, keep_projection=False):
     return q, [v.lstrip("?") for v in projection], patterns
 
 
-def derivations(endpoint, query, max_rows, claimed_regex=None):
+def derivations(endpoint, query, max_rows, claimed_regex=None, services=None):
     """Run the provenance query. Returns (projection, patterns, rows) or raises if too large."""
-    pquery, projection, patterns = rewrite(query, claimed_regex)
+    pquery, projection, patterns = rewrite(query, claimed_regex, services=services)
     rows = sparql_csv(endpoint, pquery + f"\nLIMIT {max_rows + 1}")
     if len(rows) > max_rows:
         raise OverflowError(f"more than {max_rows} derivations")
@@ -128,6 +158,10 @@ class Analyzer:
         for product, owner, _, peer, _ in links:
             self.adj[product][self.ns[owner]].add(self.ns[peer])
             self.holders[product] |= {self.ns[owner], self.ns[peer]}
+        # A type leads to the brands with a category page for it (the taxonomy's seeAlso links).
+        categories = Path(dconf.path("categories.json"))
+        self.categories = ({t: {self.ns[b] for b in brands} for t, brands in json.loads(categories.read_text()).items()}
+                           if categories.exists() else {})
 
     def owner(self, iri):
         if not iri or not iri.startswith(self.base):
@@ -150,6 +184,7 @@ class Analyzer:
     def reach(self, patterns, row):
         constants = {t[1:-1] for tp in patterns for t in tp if t.startswith("<")}
         reached = set(self.classical) | {o for o in map(self.owner, constants) if o}
+        reached |= set().union(*(self.categories.get(c, set()) for c in constants))
         rounds = 1
         while True:
             values = set(constants)
@@ -169,7 +204,12 @@ class Analyzer:
             reached |= new
             rounds += 1
 
-    def analyse(self, projection, patterns, rows, union_rows=None):
+    def analyse(self, projection, patterns, rows, union_rows=None, known=None):
+        """known: the namespaces of the owners the query names in SERVICE clauses. They are where
+        discovery starts and everything else counts as discovered. Without it, the catalog is."""
+        catalog = {i["namespace"] for i in self.owners.values() if i["classical"]}
+        self.classical = catalog if known is None else set(known)
+        self.discovered = set(self.ns.values()) - self.classical
         solutions = defaultdict(list)
         for row in rows:
             solutions[tuple(row.get(v, "") for v in projection)].append(row)
@@ -211,7 +251,7 @@ class Analyzer:
         if n == 0:
             category = "empty"
         elif stats["needs_discovery"] == 0:
-            category = "classical-only"
+            category = "known-only"
         elif stats["mixed"] > 0:
             category = "hybrid-join"
         elif stats["classical_only"] > 0:
@@ -233,6 +273,8 @@ class Analyzer:
             "reachable_needing_discovery": stats["reachable_needing_discovery"],
             "reachable_mixed": stats["reachable_mixed"],
             "storages_in_answer": short(storages),
+            "known": short(self.classical) if known is not None else [],
+            "discovered_in_answer": len(storages - self.classical),
             "storages_needed": short(needed),
             "brands_needed": len(needed & self.brands),
             "lookup_only_needed": len(needed & self.lookup_only),

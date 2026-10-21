@@ -7,20 +7,18 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q05: products similar to a given one (a shared feature, close numeric values).
-# Here: among the products some shop sells. Stale cached specs of the given product change the answer.
+# FedShop q05: products similar to a given one: the same type and close numeric values.
+# kind: analytical
+# rows: 10-200
+# discovered: 2
 SELECT DISTINCT ?product ?productLabel WHERE {
-    <{{Product}}> bsbm:productFeature ?prodFeature .
     <{{Product}}> bsbm:productPropertyNumeric1 ?origProperty1 .
     <{{Product}}> bsbm:productPropertyNumeric2 ?origProperty2 .
-    ?product bsbm:productFeature ?prodFeature .
+    ?product rdf:type <{{ProductType}}> .
     ?product rdfs:label ?productLabel .
     ?product bsbm:productPropertyNumeric1 ?simProperty1 .
     ?product bsbm:productPropertyNumeric2 ?simProperty2 .
     FILTER (<{{Product}}> != ?product)
     FILTER (?simProperty1 < (?origProperty1 + 120) && ?simProperty1 > (?origProperty1 - 120))
     FILTER (?simProperty2 < (?origProperty2 + 170) && ?simProperty2 > (?origProperty2 - 170))
-    ?listing fs:listingOf ?product .
-    ?offer bsbm:product ?listing .
 }
-ORDER BY ?productLabel

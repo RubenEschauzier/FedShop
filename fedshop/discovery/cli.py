@@ -3,7 +3,7 @@ from pathlib import Path
 
 import click
 
-from . import catalog, css, fragment, ownership, store, workload
+from . import catalog, css, fragment, ownership, store, traversal, workload
 from .common import DiscoveryConfig, load_owners
 
 
@@ -72,6 +72,17 @@ def build_workload(configfile):
 
 @cli.command()
 @CONFIG
+@click.option("--timeout", default=600, help="Seconds per instance before its process is killed")
+@click.option("--workers", default=4)
+def traverse(configfile, timeout, workers):
+    """Simulate link traversal on every instance: documents reached, answer complete or not (traversal.json)."""
+    rows = traversal.run(DiscoveryConfig(configfile), timeout=timeout, workers=workers)
+    click.echo(f"{sum(bool(r.get('complete')) for r in rows)}/{len(rows)} instances complete by traversal, "
+               f"see {DiscoveryConfig(configfile).path('traversal-summary.csv')}")
+
+
+@cli.command()
+@CONFIG
 @click.argument("queryfile", type=click.Path(exists=True, dir_okay=False))
 def check(configfile, queryfile):
     """Analyse one query (claims, reachability, delegation gain) and print the result."""
@@ -85,12 +96,13 @@ def check(configfile, queryfile):
 @CONFIG
 @click.pass_context
 def all_steps(ctx, configfile):
-    """catalog, own, load, fragment and build-workload in one go."""
+    """catalog, own, load, fragment, build-workload and traverse in one go."""
     ctx.invoke(catalog_cmd, configfile=configfile, force=False)
     ctx.invoke(own, configfile=configfile)
     ctx.invoke(load, configfile=configfile)
     ctx.invoke(fragment_cmd, configfile=configfile)
     ctx.invoke(build_workload, configfile=configfile)
+    ctx.invoke(traverse, configfile=configfile, timeout=600, workers=4)
 
 
 if __name__ == "__main__":

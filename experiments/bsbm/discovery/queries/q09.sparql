@@ -7,9 +7,15 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q09: the reviewer of a review. Here also their name and country, from their own storage.
-SELECT DISTINCT ?reviewer ?name ?country WHERE {
-    <{{Review}}> rev:reviewer ?reviewer .
+# FedShop q09: the reviewer of a review at my review site, with name and country from their own storage.
+# kind: lookup
+# rows: 1-1
+# discovered: 1
+SELECT DISTINCT ?title ?reviewer ?name ?country WHERE {
+    SERVICE <{{Site}}> {
+        <{{Review}}> rev:reviewer ?reviewer .
+        <{{Review}}> dc:title ?title .
+    }
     ?reviewer foaf:name ?name .
     ?reviewer bsbm:country ?country .
 }

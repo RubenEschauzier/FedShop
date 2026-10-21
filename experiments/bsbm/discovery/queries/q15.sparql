@@ -7,12 +7,17 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# Reviews of a product by reviewers from the country of a vendor offering it.
+# Reviews of a product by reviewers from the country of a vendor offering it at my shop.
+# kind: product
+# rows: 2-40
+# discovered: 3
 SELECT DISTINCT ?vendor ?review ?reviewerName ?country WHERE {
-    ?listing fs:listingOf <{{Product}}> .
-    ?offer bsbm:product ?listing .
-    ?offer bsbm:vendor ?vendor .
-    ?vendor bsbm:country ?country .
+    SERVICE <{{Shop}}> {
+        ?listing fs:listingOf <{{Product}}> .
+        ?offer bsbm:product ?listing .
+        ?offer bsbm:vendor ?vendor .
+        ?vendor bsbm:country ?country .
+    }
     ?page fs:listingOf <{{Product}}> .
     ?review bsbm:reviewFor ?page .
     ?review rev:reviewer ?reviewer .

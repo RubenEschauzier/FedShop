@@ -7,16 +7,21 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q12: an offer with its product label (from the brand) and its vendor.
+# FedShop q12: an offer at my shop with its vendor, and the product's label from its brand.
+# kind: lookup
+# rows: 1-1
+# discovered: 1
 SELECT DISTINCT ?product ?productlabel ?vendorname ?vendorhomepage ?offerURL ?price ?deliveryDays ?validTo WHERE {
-    <{{Offer}}> bsbm:product ?listing .
-    ?listing fs:listingOf ?product .
+    SERVICE <{{Shop}}> {
+        <{{Offer}}> bsbm:product ?listing .
+        ?listing fs:listingOf ?product .
+        <{{Offer}}> bsbm:vendor ?vendorURI .
+        ?vendorURI rdfs:label ?vendorname .
+        ?vendorURI foaf:homepage ?vendorhomepage .
+        <{{Offer}}> bsbm:offerWebpage ?offerURL .
+        <{{Offer}}> bsbm:price ?price .
+        <{{Offer}}> bsbm:deliveryDays ?deliveryDays .
+        <{{Offer}}> bsbm:validTo ?validTo .
+    }
     ?product rdfs:label ?productlabel .
-    <{{Offer}}> bsbm:vendor ?vendorURI .
-    ?vendorURI rdfs:label ?vendorname .
-    ?vendorURI foaf:homepage ?vendorhomepage .
-    <{{Offer}}> bsbm:offerWebpage ?offerURL .
-    <{{Offer}}> bsbm:price ?price .
-    <{{Offer}}> bsbm:deliveryDays ?deliveryDays .
-    <{{Offer}}> bsbm:validTo ?validTo .
 }

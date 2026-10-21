@@ -7,26 +7,21 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q07: a product page: its label, current offers from vendors in a country, reviews with reviewer names.
-SELECT DISTINCT ?productLabel ?offer ?price ?vendor ?vendorTitle ?review ?revTitle ?reviewer ?revName ?rating1 ?rating2 WHERE {
-    <{{Product}}> rdfs:label ?productLabel .
-    OPTIONAL {
+# FedShop q07: a product page: my shop's offers for a product, its label, and its reviews at every review site with reviewer names.
+# kind: product
+# rows: 10-150
+# discovered: 3
+SELECT DISTINCT ?productLabel ?offer ?price ?review ?revTitle ?revName ?rating1 WHERE {
+    SERVICE <{{Shop}}> {
         ?offerListing fs:listingOf <{{Product}}> .
         ?offer bsbm:product ?offerListing .
         ?offer bsbm:price ?price .
-        ?offer bsbm:vendor ?vendor .
-        ?vendor rdfs:label ?vendorTitle .
-        ?vendor bsbm:country <{{Country}}> .
-        ?offer bsbm:validTo ?date .
-        FILTER (?date > "{{date}}"^^xsd:dateTime)
     }
-    OPTIONAL {
-        ?reviewPage fs:listingOf <{{Product}}> .
-        ?review bsbm:reviewFor ?reviewPage .
-        ?review rev:reviewer ?reviewer .
-        ?reviewer foaf:name ?revName .
-        ?review dc:title ?revTitle .
-        OPTIONAL { ?review bsbm:rating1 ?rating1 . }
-        OPTIONAL { ?review bsbm:rating2 ?rating2 . }
-    }
+    <{{Product}}> rdfs:label ?productLabel .
+    ?reviewPage fs:listingOf <{{Product}}> .
+    ?review bsbm:reviewFor ?reviewPage .
+    ?review dc:title ?revTitle .
+    ?review rev:reviewer ?reviewer .
+    ?reviewer foaf:name ?revName .
+    OPTIONAL { ?review bsbm:rating1 ?rating1 . }
 }

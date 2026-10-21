@@ -7,16 +7,21 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q10: cheap, fast, current offers for a product from vendors in a country.
-SELECT DISTINCT ?offer ?price WHERE {
+# FedShop q10: a price check: offers for a product at other shops, cheaper than my shop's and delivered within some days.
+# kind: product
+# rows: 2-40
+# discovered: 2
+SELECT DISTINCT ?offer ?price ?vendor ?deliveryDays WHERE {
+    SERVICE <{{Shop}}> {
+        ?myListing fs:listingOf <{{Product}}> .
+        ?myOffer bsbm:product ?myListing .
+        ?myOffer bsbm:price ?myPrice .
+    }
     ?listing fs:listingOf <{{Product}}> .
     ?offer bsbm:product ?listing .
+    ?offer bsbm:price ?price .
+    FILTER (?price < ?myPrice)
     ?offer bsbm:vendor ?vendor .
-    ?vendor bsbm:country <{{Country}}> .
     ?offer bsbm:deliveryDays ?deliveryDays .
     FILTER (?deliveryDays <= {{days}})
-    ?offer bsbm:price ?price .
-    ?offer bsbm:validTo ?date .
-    FILTER (?date > "{{date}}"^^xsd:dateTime)
 }
-ORDER BY xsd:double(str(?price))

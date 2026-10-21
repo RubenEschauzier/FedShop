@@ -7,22 +7,22 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
-# FedShop q03: products of a type with one feature but not another, within two numeric bounds.
-# Here: among the products some shop sells.
+# FedShop q03: products of a type within two numeric bounds that lack a given feature, among those offered somewhere.
+# kind: analytical
+# rows: 20-300
+# discovered: 2
 SELECT DISTINCT ?product ?label WHERE {
     ?product rdfs:label ?label .
     ?product rdf:type <{{ProductType}}> .
-    ?product bsbm:productFeature <{{ProductFeature1}}> .
     ?product bsbm:productPropertyNumeric1 ?p1 .
     FILTER (?p1 > {{x}})
     ?product bsbm:productPropertyNumeric3 ?p3 .
     FILTER (?p3 < {{y}})
     OPTIONAL {
-        ?product bsbm:productFeature <{{ProductFeature2}}> .
+        ?product bsbm:productFeature <{{ProductFeature}}> .
         ?product rdfs:label ?testVar .
     }
     FILTER (!bound(?testVar))
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
 }
-ORDER BY ?label
