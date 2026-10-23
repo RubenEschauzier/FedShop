@@ -10,6 +10,11 @@ type it deals with, linked to a global BSBM IRI with owl:sameAs. Here:
 - a reviewer owns their profile (moved out of the review site), which lists the reviews they wrote
   with `foaf:made`, at whichever review site.
 
+An entity's IRI is the URL of the document that describes it plus `#it` (<base>vendor13/Offer7#it in
+document <base>vendor13/Offer7), so what a server says about the document (its size, its type,
+when it changed) is not about the entity. Countries keep their hash IRIs in one document
+(<base>taxonomy/countries#ES).
+
 A listing (or review page) keeps FedShop's local product IRI but no longer repeats the product:
 it says `fs:listingOf <brand product>`. Offers and reviews point to the listing, as in FedShop.
 
@@ -97,6 +102,11 @@ def nt(s, p, o):
     return f"{s} {p} {o} .\n"
 
 
+def doc(iri):
+    """The document that describes an entity: its IRI without fragment."""
+    return iri.split("#", 1)[0]
+
+
 def choose_classical(dconf, names):
     """Shops and review sites in the catalog, stratified over both kinds."""
     explicit = dconf.classical_conf.get("members")
@@ -132,7 +142,10 @@ class Ownership:
         return f"producer{brand}"
 
     def product_iri(self, n):
-        return f"{self.dconf.ns(self.brand_name(self.catalog.brand_of[n]))}Product{n}"
+        return f"{self.dconf.ns(self.brand_name(self.catalog.brand_of[n]))}Product{n}#it"
+
+    def producer_iri(self, brand):
+        return f"{self.dconf.ns(self.brand_name(brand))}Producer{brand}#it"
 
     def map_iri(self, iri):
         m = FEDSHOP_MEMBER.match(iri)
@@ -140,17 +153,17 @@ class Ownership:
             member, local = m.groups()
             if local.startswith("Person"):
                 return self.reviewer_iri[(member, local)]
-            return f"{self.dconf.ns(member)}{local}"
+            return f"{self.dconf.ns(member)}{local}#it"
         if iri.startswith(BSBM):
             g = GLOBAL.match(iri[len(BSBM):])
             if g:
                 kind, n = g.group(1), int(g.group(2))
                 if kind in ("ProductType", "ProductFeature"):
-                    return f"{self.dconf.ns('taxonomy')}{kind}{n}"
+                    return f"{self.dconf.ns('taxonomy')}{kind}{n}#it"
                 if kind == "Product":
                     return self.product_iri(n)
                 if kind == "Producer":
-                    return f"{self.dconf.ns(self.brand_name(n))}Producer{n}"
+                    return self.producer_iri(n)
         if iri.startswith(COUNTRIES):
             code = iri[len(COUNTRIES):]
             self.countries.add(code)
@@ -170,7 +183,7 @@ class Ownership:
                               if p == f"<{RDF_TYPE}>" and o == f"<{BSBM}Person>"}, key=number)
             for local in persons:
                 name = f"reviewer{len(self.reviewers)}"
-                self.reviewer_iri[(site, local)] = f"{self.dconf.ns(name)}me"
+                self.reviewer_iri[(site, local)] = f"{self.dconf.ns(name)}profile#it"
                 self.reviewers.append(name)
 
     def read(self, member):
@@ -216,7 +229,7 @@ class Ownership:
             if p in (f"<{OWL_SAMEAS}>",):
                 continue
             if p == f"<{BSBM}producer>":
-                o = f"<{self.dconf.ns(self.brand_name(self.catalog.brand_of[n]))}Producer{self.catalog.brand_of[n]}>"
+                o = f"<{self.producer_iri(self.catalog.brand_of[n])}>"
             out.append((f"<{self.product_iri(n)}>", p, self.map_term(o)))
         return out
 
@@ -226,7 +239,7 @@ class Ownership:
             name = self.brand_name(brand)
             for s, p, o in self.catalog.producer(brand):
                 if p != f"<{OWL_SAMEAS}>":
-                    self.data[name].append(nt(f"<{self.dconf.ns(name)}Producer{brand}>", p, self.map_term(o)))
+                    self.data[name].append(nt(f"<{self.producer_iri(brand)}>", p, self.map_term(o)))
         for n in range(self.catalog.n):
             triples = self.spec(n)
             if n in self.listings:
@@ -280,7 +293,7 @@ class Ownership:
         for n in sorted(self.listings):
             spec = [t for t in self.specs[n] if t[1] in (f"<{RDFS_LABEL}>", *(f"<{p}>" for p in NUMERIC))]
             for member, listing in sorted(self.listings[n].items()):
-                rng = random.Random(f"{conf['seed']}|{listing}")
+                rng = random.Random(f"{conf['seed']}|{doc(listing)}")
                 if rng.random() >= share:
                     continue
                 is_stale = rng.random() < stale
@@ -292,7 +305,7 @@ class Ownership:
                         o = f'"{value}"^^<http://www.w3.org/2001/XMLSchema#integer>'
                     triples.append(nt(s, p, o))
                 self.replicas[member].extend(triples)
-                self.replica_docs.append({"owner": member, "doc": listing, "product": self.product_iri(n),
+                self.replica_docs.append({"owner": member, "doc": doc(listing), "product": self.product_iri(n),
                                           "stale": is_stale, "triples": "".join(triples)})
 
     def build_placements(self):
@@ -308,20 +321,24 @@ class Ownership:
             for line in self.data[member]:
                 s, p, o = line[:-3].split(" ", 2)
                 if p in backlinks:
-                    place(line, o[1:-1])
+                    place(line, doc(o[1:-1]))
         taxonomy = self.dconf.ns("taxonomy")
         for brand in range(self.catalog.count):
             name = self.brand_name(brand)
             for line in self.data[name]:
                 s, p, o = line[:-3].split(" ", 2)
                 if p == f"<{BSBM}producer>":
-                    place(line, o[1:-1])
+                    place(line, doc(o[1:-1]))
                 elif p == f"<{RDF_TYPE}>" and o.startswith(f"<{taxonomy}ProductType"):
-                    place(line, f"{self.dconf.ns(name)}types/{o[len(taxonomy) + 1:-1]}")
+                    place(line, self.category_page(name, o[1:-1]))
                     self.categories[o[1:-1]].add(name)
         for type_iri, brands in sorted(self.categories.items()):
             for name in sorted(brands, key=number):
-                self.data["taxonomy"].append(nt(f"<{type_iri}>", f"<{SEEALSO}>", f"<{self.dconf.ns(name)}types/{type_iri[len(taxonomy):]}>"))
+                self.data["taxonomy"].append(nt(f"<{type_iri}>", f"<{SEEALSO}>", f"<{self.category_page(name, type_iri)}>"))
+
+    def category_page(self, brand, type_iri):
+        """A brand's page listing its products of a type: <brand>/types/ProductTypeN (a document)."""
+        return f"{self.dconf.ns(brand)}types/{doc(type_iri)[len(self.dconf.ns('taxonomy')):]}"
 
     # ----- owners -----
     def owners(self):

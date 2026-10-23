@@ -3,7 +3,7 @@ from pathlib import Path
 
 import click
 
-from . import catalog, css, fragment, ownership, store, traversal, workload
+from . import catalog, css, engine, fragment, ownership, store, traversal, workload
 from .common import DiscoveryConfig, load_owners
 
 
@@ -72,6 +72,16 @@ def build_workload(configfile):
 
 @cli.command()
 @CONFIG
+def plain(configfile):
+    """Write the plain form (no SERVICE clauses) of every instance, with its own answers."""
+    dconf = DiscoveryConfig(configfile)
+    store.start(dconf)
+    store.check(dconf, load_owners(dconf))
+    click.echo(f"{len(workload.plain_forms(dconf))} plain forms written")
+
+
+@cli.command()
+@CONFIG
 @click.option("--timeout", default=600, help="Seconds per instance before its process is killed")
 @click.option("--workers", default=4)
 def traverse(configfile, timeout, workers):
@@ -79,6 +89,26 @@ def traverse(configfile, timeout, workers):
     rows = traversal.run(DiscoveryConfig(configfile), timeout=timeout, workers=workers)
     click.echo(f"{sum(bool(r.get('complete')) for r in rows)}/{len(rows)} instances complete by traversal, "
                f"see {DiscoveryConfig(configfile).path('traversal-summary.csv')}")
+
+
+@cli.command("run-comunica")
+@CONFIG
+@click.option("--name", required=True, help="Run directory: <outdir>/runs/<name>; an existing run with the same settings resumes")
+@click.option("--form", type=click.Choice(["plain", "service"]), default="plain",
+              help="plain.sparql with the catalog's endpoints, or injected.sparql (SERVICE clauses) with seeds only")
+@click.option("--comunica-config", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="Comunica config (run through query-dynamic.js); default: the engine's built-in config")
+@click.option("--endpoints/--no-endpoints", default=None, help="Give the catalog's endpoints as sources (default: for --form plain)")
+@click.option("--timeout", default=180, help="Seconds per instance before its process group is killed")
+@click.option("--engine", "engine_dir", default=engine.DEFAULT_ENGINE, help="Comunica engine package (with bin/query.js)")
+@click.option("--pattern", default="q*/instance_*", help="Instances to run, as a glob under workload/")
+def run_comunica(configfile, name, form, comunica_config, endpoints, timeout, engine_dir, pattern):
+    """Run the workload with Comunica, recording each result's arrival time (runs/<name>/)."""
+    dconf = DiscoveryConfig(configfile)
+    results = engine.run(dconf, name, form=form, comunica_config=comunica_config, endpoints=endpoints,
+                         timeout=timeout, engine=engine_dir, pattern=pattern)
+    click.echo(Path(dconf.outdir, "runs", name, "summary.md").read_text())
+    click.echo(f"{len(results)} instances, see {Path(dconf.outdir, 'runs', name)}")
 
 
 @cli.command()

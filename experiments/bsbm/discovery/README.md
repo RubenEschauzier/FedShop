@@ -16,6 +16,8 @@ A marketplace built from FedShop's data in which every triple has one owner: the
 
 Every owner's namespace is `<base_url><owner>/` (`http://localhost:3000/vendor13/`). It is a storage of documents, one per subject, and, for owners with a service, a SPARQL endpoint that answers for that owner only.
 
+An entity's IRI is the URL of its document plus `#it`: the offer `vendor13/Offer7#it` is described in the document `vendor13/Offer7`. What the server says about a document (its type, size, modification date) is then not about the entity. Below, entities are named by their document.
+
 ## Data model
 
 - **Generation.** Everything comes from FedShop's own WatDiv templates, run by the benchmark into its own folder; FedShop's datasets are not used or changed.
@@ -23,7 +25,7 @@ Every owner's namespace is `<base_url><owner>/` (`http://localhost:3000/vendor13
   - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded.
 - **Brands.** A brand's product `producer22/Product77` carries the full BSBM specification: label, comment, types, features, numeric and textual properties, producer. Brand sizes follow rank^-`zipf` (0.8) with at least `min_products`: in the full config 16,676 products for the largest brand and 136 for the smallest, and the 100 brands with a service hold 67% of all products.
 - **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/Product77>`. Offers and reviews point to the listing, as in FedShop.
-- **Reviewers.** Reviewer profiles move out of the review sites into `reviewer<k>/me`. Reviews point to them with `rev:reviewer`, and a profile lists the reviews its reviewer wrote, at any review site, with `foaf:made`.
+- **Reviewers.** Reviewer profiles move out of the review sites into `reviewer<k>/profile`. Reviews point to them with `rev:reviewer`, and a profile lists the reviews its reviewer wrote, at any review site, with `foaf:made`.
 - **Taxonomy.** FedShop's types and features, without copies, plus every country as `taxonomy/countries#US`. Each type links with `rdfs:seeAlso` to the category pages of the brands that make it.
 - **Links.** `rdfs:seeAlso` between listings of the same product: a shop's listing to `reviews` (2) review pages, a review page to `where_to_buy` (3) listings, a review page to `also_reviewed` (0) other pages. A brand's product links to `brand_where_to_buy` (2) listings and to every review page of the product (`brand_reviews: all`, "reviewed at"). Peers are drawn per listing, seeded. Shops never link to shops, and review sites don't link to each other.
 - **Documents for traversal.** Some documents repeat triples their owner already has elsewhere, so that a traversal engine following the query's patterns (cMatch: a triple matching a pattern leads to the IRIs in it) gets from one document to the next. The owners' data and services don't change.
@@ -153,6 +155,19 @@ node -r ./$B/discovery/virtuoso-fetch.js <engine>/bin/query.js \
 ```
 
 - **Sources.** The query's `SERVICE` clauses name the known endpoints; seeds are the query's own IRIs. No endpoint list is given. `sources/catalog-endpoints.tsv` lists the endpoints templates may name, for engines or experiments that want them.
+- **Plain form.** `plain.sparql` is the same query without `SERVICE` clauses, for engines that select sources themselves: give them the catalog's endpoints and the seeds. Without `SERVICE`, a pattern matches any owner, so the plain form has its own answers (`plain-results.csv`, `plain-union-results.csv`); where `SERVICE` named "my shop" (q06, q07, q10, q15, q16) they are larger.
+
+### Comunica experiments
+
+```bash
+experiments/bsbm/discovery/comunica/run-experiment.sh                      # plain form, catalog endpoints, no bind joins
+experiments/bsbm/discovery/comunica/run-experiment.sh plain-default --comunica-config ""   # the same with Comunica's own config
+experiments/bsbm/discovery/comunica/run-experiment.sh service-no-bind-join --form service  # SERVICE form, seeds only
+```
+
+The script starts Virtuoso and CSS if they aren't running, then runs `fedshop-discovery run-comunica` over every instance. Each instance runs in its own process group, killed after 180 s; the output is read as it streams, so every correct row gets its arrival time, and a killed run keeps what it returned. Results go to `benchmark/discovery/runs/<name>/`: `summary.md` (per template), `results.jsonl` (per instance: status, time, correct rows, claim violations, documents and service requests, first result, arrival times), `outputs/` and `logs/`. A run started again with the same name and settings resumes where it stopped. The engine defaults to `~/projects/comunica-feature-link-traversal-default/engines/query-sparql-link-traversal-solid` (`--engine` or `COMUNICA_ENGINE` to change).
+
+`comunica/config-no-bind-join.json` is the engine's Solid default config without bind joins: it imports the same parts, except the join actors, which it defines itself without `ActorRdfJoinMultiBind`, `ActorRdfJoinMultiBindSource`, `ActorRdfJoinMultiSmallestFilterBindings` and `ActorRdfJoinOptionalBind`. Joins are then symmetric hash, nested loop and multi-smallest; each pattern goes to each source once instead of once per binding. It is loaded through the engine's `query-dynamic.js` (`COMUNICA_CONFIG`), so the engine itself is unchanged.
 
 - **`virtuoso-fetch.js`:** Node.js engines need it against Virtuoso. It sends every request with `Connection: close` (Virtuoso keeps at most 10 idle connections and silently drops the rest, and Node's `fetch` then fails with "fetch failed"), keeps at most `VIRTUOSO_LIMIT` (16) requests in flight (all services share one server with 20 HTTP threads, and a flood gets connect timeouts), retries requests whose connection timed out or was reset, and writes request counts to stderr every 2 s. `no-keepalive.js` only does the first.
 - **Compare answers as sets.** Classical owners serve every triple twice, from their service and from their documents, so an engine that merges sources as a bag repeats rows (q12#0: 512 rows, 1 distinct). All templates are `SELECT DISTINCT`.
@@ -171,7 +186,8 @@ node -r ./$B/discovery/virtuoso-fetch.js <engine>/bin/query.js \
 | `categories.json` | every product type and the brands with a category page for it |
 | `web/` | the documents CSS serves |
 | `sources/` | the catalog (`catalog-endpoints.tsv`, `catalog-fedx.ttl`); `discovered-storages.tsv` is for analysis only |
-| `workload/<query>/instance_<i>/` | `injected.sparql`, `results.csv` (claims), `union-results.csv`, `reachable.csv`, `analysis.json`, `traversal.json` |
+| `workload/<query>/instance_<i>/` | `injected.sparql`, `results.csv` (claims), `union-results.csv`, `reachable.csv`, `analysis.json`, `traversal.json`; `plain.sparql`, `plain-results.csv`, `plain-union-results.csv` |
+| `runs/<name>/` | engine runs: `summary.md`, `results.jsonl`, `outputs/`, `logs/` |
 | `workload-summary.csv` | every candidate, kept or not, and why |
 | `traversal-summary.csv` | per instance: documents reached by traversal, answer complete or not |
 
@@ -184,7 +200,7 @@ node -r ./$B/discovery/virtuoso-fetch.js <engine>/bin/query.js \
 - **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands own 200,000 products, most of them sold nowhere.
 - **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment.
 - **Links, cached specs and category pages are new.** FedShop has no links between members, no data held by a non-owner and no documents.
-- **IRIs.** All IRIs move under `http://localhost:3000/<owner>/`; countries move into the taxonomy.
+- **IRIs.** All IRIs move under `http://localhost:3000/<owner>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy.
 - **Literals.** Dates gain their time of day (FedShop's `"2008-04-22"^^xsd:dateTime` is not a valid dateTime) and prices become `xsd:decimal` instead of `xsd:double`. That way documents and Virtuoso write every triple the same way.
 
 **Federation**
@@ -206,3 +222,7 @@ node -r ./$B/discovery/virtuoso-fetch.js <engine>/bin/query.js \
 - **Own value selection.** Values come from this benchmark's own selection on the new data, not from FedShop's query generator.
 - **New selection rules.** Instances are kept by answer size, need for discovery and the number of owners involved, the same rules for every template. Delegation gains are reported only.
 - **New reference.** The reference answer is the claim semantics, not plain evaluation over the union of members.
+
+## TODO
+
+- **Oracle federation baseline.** Give a federation engine (FedX, and the existing federation approaches, most of which are in Comunica) every discovered owner's endpoint up front: the federation cost if discovery were free. The owners each answer needs are in `analysis.json` (`storages_in_answer`). Owners without a service (small brands, reviewers) have no endpoint, so queries that need them can't be answered this way; give their documents as sources, or report those queries separately.

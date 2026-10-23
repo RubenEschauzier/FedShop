@@ -18,7 +18,9 @@ least `discovered` owners beyond the named ones. Delegation gains are reported, 
 
 Every kept instance gets injected.sparql, results.csv (claim semantics), union-results.csv (every
 triple admitted outside SERVICE clauses, as an engine merging all sources gets), reachable.csv and
-analysis.json.
+analysis.json. Its plain form, plain.sparql, is the same query without SERVICE clauses, for engines
+that select sources themselves (given the catalog's endpoints); it has its own answers,
+plain-results.csv and plain-union-results.csv, since without SERVICE a pattern matches any owner.
 """
 import csv
 import io
@@ -334,6 +336,48 @@ def reference_query(text, regex, services):
     return "\n".join(prefix_lines) + f"\n{select} WHERE {{\n{{ {inner} }}\n}}\n{modifiers}\n"
 
 
+# ----- plain forms -----
+def plain_query(text):
+    """The query without its SERVICE clauses: their patterns stay, as a plain group."""
+    lines = text.splitlines()
+    drop, i = set(), 0
+    while i < len(lines):
+        if re.match(r"^\s*SERVICE\s*<[^>]+>\s*\{\s*$", lines[i], re.I):
+            depth, j = 1, i + 1
+            while depth:
+                t = lines[j].strip()
+                depth += t.endswith("{") - t.startswith("}")
+                j += 1
+            drop |= {i, j - 1}
+            i = j
+        else:
+            i += 1
+    return "\n".join(l for k, l in enumerate(lines) if k not in drop) + "\n"
+
+
+def write_plain(dconf, inst, regex, services):
+    """plain.sparql and its answers for one instance directory."""
+    text = Path(inst, "injected.sparql").read_text()
+    plain = plain_query(text)
+    Path(inst, "plain.sparql").write_text(plain)
+    if plain == text:
+        shutil.copy(Path(inst, "results.csv"), Path(inst, "plain-results.csv"))
+        shutil.copy(Path(inst, "union-results.csv"), Path(inst, "plain-union-results.csv"))
+    else:
+        Path(inst, "plain-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, regex, services)))
+        Path(inst, "plain-union-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, None, services)))
+
+
+def plain_forms(dconf):
+    """Write the plain form of every instance of an existing workload."""
+    owners = load_owners(dconf)
+    regex, services = claimed_regex(dconf, owners), service_map(owners)
+    insts = sorted(Path(dconf.outdir, "workload").glob("q*/instance_*"))
+    for inst in insts:
+        write_plain(dconf, inst, regex, services)
+    return insts
+
+
 # ----- writing -----
 def write_instance(outdir, text, record, reference, union_reference, projection, reachable):
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -436,6 +480,7 @@ def build(dconf):
                 record["reference_rows"] = max(len(reference.strip().splitlines()) - 1, 0)
                 write_instance(outdir / query / f"instance_{kept}", text, record, reference, union_reference,
                                projection, reachable)
+                write_plain(dconf, outdir / query / f"instance_{kept}", regex, services)
                 kept += 1
             records.append(record)
         LOGGER.info(f"{query}: kept {kept}/{conf['per_template']} after {tried} candidates")
