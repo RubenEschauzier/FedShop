@@ -1,0 +1,6 @@
+{
+  "name": "fedshop-discovery-fragmenter",
+  "private": true,
+  "description": "rdf-dataset-fragmenter, which splits the discovery benchmark's data into one document per subject",
+  "dependencies": { "rdf-dataset-fragmenter": "2.10.0" }
+}
