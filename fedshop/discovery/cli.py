@@ -3,7 +3,7 @@ from pathlib import Path
 
 import click
 
-from . import catalog, css, engine, fragment, ownership, store, workload
+from . import catalog, css, fragment, ownership, store, workload
 from .common import DiscoveryConfig, load_owners
 
 
@@ -34,7 +34,7 @@ def members(configfile, force):
 @cli.command()
 @CONFIG
 def own(configfile):
-    """Give every triple its owner: data/<owner>.nt, owners.json, links.tsv, placements.nq."""
+    """Restructure FedShop's data into publishers: data/<publisher>.nt, publishers.json, links.tsv, placements.nq."""
     click.echo(json.dumps(ownership.run(DiscoveryConfig(configfile)), indent=2))
 
 
@@ -57,11 +57,13 @@ def fragment_cmd(configfile):
 @cli.command()
 @CONFIG
 @click.option("--log-level", default="warn")
-def serve(configfile, log_level):
-    """Serve the documents with the Community Solid Server (keeps running)."""
+@click.option("--request-log", type=click.Path(dir_okay=False), default=None,
+              help="Append every request the proxy forwards to this JSON-lines file")
+def serve(configfile, log_level, request_log):
+    """Serve the documents and query services behind the counting proxy (keeps running)."""
     dconf = DiscoveryConfig(configfile)
     store.start(dconf)
-    css.serve(dconf, log_level)
+    css.serve(dconf, load_owners(dconf), log_level, request_log)
 
 
 @cli.command("build-workload")
@@ -86,31 +88,11 @@ def plain(configfile):
     click.echo(f"{len(workload.plain_forms(dconf))} plain forms written")
 
 
-@cli.command("run-comunica")
-@CONFIG
-@click.option("--name", required=True, help="Run directory: <outdir>/runs/<name>; an existing run with the same settings resumes")
-@click.option("--form", type=click.Choice(["plain", "service"]), default="plain",
-              help="plain.sparql with the catalog's endpoints, or injected.sparql (SERVICE clauses) with seeds only")
-@click.option("--comunica-config", type=click.Path(exists=True, dir_okay=False), default=None,
-              help="Comunica config (run through query-dynamic.js); default: the engine's built-in config")
-@click.option("--endpoints/--no-endpoints", default=None, help="Give the catalog's endpoints as sources (default: for --form plain)")
-@click.option("--timeout", default=180, help="Seconds per instance before its process group is killed")
-@click.option("--engine", "engine_dir", default=engine.DEFAULT_ENGINE, help="Comunica engine package (with bin/query.js)")
-@click.option("--pattern", default="q*/instance_*", help="Instances to run, as a glob under workload/")
-def run_comunica(configfile, name, form, comunica_config, endpoints, timeout, engine_dir, pattern):
-    """Run the workload with Comunica, recording each result's arrival time (runs/<name>/)."""
-    dconf = DiscoveryConfig(configfile)
-    results = engine.run(dconf, name, form=form, comunica_config=comunica_config, endpoints=endpoints,
-                         timeout=timeout, engine=engine_dir, pattern=pattern)
-    click.echo(Path(dconf.outdir, "runs", name, "summary.md").read_text())
-    click.echo(f"{len(results)} instances, see {Path(dconf.outdir, 'runs', name)}")
-
-
 @cli.command()
 @CONFIG
 @click.argument("queryfile", type=click.Path(exists=True, dir_okay=False))
 def check(configfile, queryfile):
-    """Analyse one query (claims, reachability, delegation gain) and print the result."""
+    """Analyse one query (sources, reachability, delegation gain) and print the result."""
     dconf = DiscoveryConfig(configfile)
     store.start(dconf)
     store.check(dconf, load_owners(dconf))

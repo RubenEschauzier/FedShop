@@ -1,10 +1,11 @@
-"""The query services: one Virtuoso container with a graph per owner and a virtual endpoint per composite.
+"""The query services: one Virtuoso container with a graph per publisher and a virtual endpoint per
+publisher with a service.
 
-Every owner's data (data/<owner>.nt) is loaded into the graph named by its
-namespace, so the analysis and the reference answers can see who holds what. Owners with a
-service get a virtual SPARQL endpoint, as FedShop builds them: a vhost on its own port whose
-default graph is the owner's graph, so the endpoint answers for that owner only. Owners without a
-service (reviewers, small brands) are only loaded for the analysis.
+Every publisher's data (data/<publisher>.nt) is loaded into the graph named by its storage, so the
+analysis and the reference answers can see who holds what. Publishers with a service get a virtual
+SPARQL endpoint, as FedShop builds them: a vhost on its own port (the public port + the proxy's
+offset) whose default graph is the publisher's graph. Publishers without a service (reviewers,
+small brands) are only loaded for the analysis.
 """
 import os
 import subprocess
@@ -43,7 +44,7 @@ def load(dconf, owners):
     statements = []
     for name, info in owners.items():
         if Path(data_dir, f"{name}.nt").exists():
-            statements.append(f"ld_dir('/usr/share/proj', '{name}.nt', '{info['namespace']}');")
+            statements.append(f"ld_dir('/usr/share/proj', '{name}.nt', '{info['storage']}');")
     statements.append("rdf_loader_run();")
     LOGGER.info(f"Loading {len(statements) - 1} files into {dconf.virtuoso['container']}...")
     isql(dconf, statements)
@@ -51,28 +52,30 @@ def load(dconf, owners):
     services = []
     for name, info in owners.items():
         if info["service"]:
+            port = dconf.internal_port(info["port"])        # the proxy serves the public port
             services += [
-                f"DB.DBA.VHOST_DEFINE(vhost=>'localhost', lhost=>':{info['port']}', lpath=>'/{name}/sparql', "
+                f"DB.DBA.VHOST_DEFINE(vhost=>'localhost', lhost=>':{port}', lpath=>'/{name}/sparql', "
                 f"ppath=>'/!sparql/', is_dav=>1, vsp_user=>'dba', opts=>vector('browse_sheet', '', 'noinherit', 'yes'));",
                 f"INSERT REPLACING DB.DBA.SYS_SPARQL_HOST (SH_HOST, SH_GRAPH_URI) "
-                f"VALUES ('localhost:{info['port']}', '{info['namespace']}');",
+                f"VALUES ('localhost:{port}', '{info['storage']}');",
             ]
     isql(dconf, services)
     return check(dconf, owners)
 
 
 def check(dconf, owners):
-    """Triples per graph against owners.json, and every service answering for its own graph only."""
+    """Triples per graph against publishers.json, and every service answering for its own graph only."""
     counts = {r["g"]: int(r["n"]) for r in sparql_csv(dconf.endpoint, "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g")}
-    wrong = {n: (counts.get(i["namespace"], 0), i["triples"]) for n, i in owners.items() if counts.get(i["namespace"], 0) != i["triples"]}
+    wrong = {n: (counts.get(i["storage"], 0), i["triples"]) for n, i in owners.items() if counts.get(i["storage"], 0) != i["triples"]}
     if wrong:
-        raise RuntimeError(f"Graphs disagree with owners.json (loaded, expected): {dict(list(wrong.items())[:5])}")
+        raise RuntimeError(f"Graphs disagree with publishers.json (loaded, expected): {dict(list(wrong.items())[:5])}")
     for name, info in owners.items():
         if info["service"]:
-            n = int(sparql_csv(info["endpoint"], "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }")[0]["n"])
+            internal = f"http://localhost:{dconf.internal_port(info['port'])}/{name}/sparql"
+            n = int(sparql_csv(internal, "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }")[0]["n"])
             if n != info["triples"]:
                 raise RuntimeError(f"{info['endpoint']} answers {n} triples, {name} holds {info['triples']}")
     services = sum(i["service"] for i in owners.values())
-    LOGGER.info(f"{len(owners)} graphs loaded ({sum(counts.get(i['namespace'], 0) for i in owners.values())} triples), "
+    LOGGER.info(f"{len(owners)} graphs loaded ({sum(counts.get(i['storage'], 0) for i in owners.values())} triples), "
                 f"{services} services answer for their own graph")
     return {"graphs": len(owners), "services": services}

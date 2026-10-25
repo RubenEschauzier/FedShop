@@ -1,24 +1,18 @@
-"""Per-solution provenance, claim semantics and reachability of a query.
+"""Per-solution provenance and reachability of a query.
 
 The query is rewritten so that every triple pattern sits in its own `GRAPH ?gN { ... }`, and run
-over every owner's graph. Each derivation then tells which owner's graph supplied each pattern.
-A pattern inside `SERVICE <endpoint> { ... }` is pinned to the graph of that endpoint's owner, and
-admits whatever that service holds: a SERVICE clause asks one source what it has.
+over every publisher's graph. Each derivation then tells which publisher's graph supplied each
+pattern. A pattern inside `SERVICE <endpoint> { ... }` is pinned to the graph of that endpoint's
+publisher: a SERVICE clause asks one source what it has. Every other pattern matches any graph, so
+the answer is the query's answer over all published data.
 
-Claims. Every owner with a query service (a composite) claims its namespace: the triples whose
-subject is in it. A triple is admitted from the graph that holds it if that graph is its subject's
-owner, or if nobody claims the subject (its owner has no service). The claim semantics (paper,
-Def. 10) is the reference answer; the union semantics (every triple admitted) is computed alongside.
-Every triple is held by its subject's owner only, so the two are equal: claims hold in this
-environment, and enforcing them prunes sources without changing the answer.
-
-Reachability. Discovery starts at the owners whose services the query names (or, for a query
-without SERVICE clauses, at the catalog). In each round the values
-the query binds lead further: its constants, and the terms of patterns supplied by reached owners.
-An IRI in an owner's namespace leads to that owner (dereference it; the storage root names the
-service, if any). A brand product leads, through the rdfs:seeAlso links of reached listings and of
-the brand itself, to the other owners' listings of that product. A solution is reachable if some
-admitted derivation only uses reached owners.
+Reachability. Discovery starts at the publishers whose services the query names (or, for a query
+without SERVICE clauses, at the catalog). In each round the values the query binds lead further:
+its constants, and the terms of patterns supplied by reached publishers. An IRI leads to the
+storage that serves its document (dereference it; the storage root names the service, if any). A
+brand product leads, through the rdfs:seeAlso links of reached listings and of the brand itself, to
+the other publishers' listings of that product. A solution is reachable if some derivation only
+uses reached publishers.
 """
 import json
 import re
@@ -61,16 +55,10 @@ def service_endpoints(query):
     return list(dict.fromkeys(re.findall(r"SERVICE\s*<([^>]+)>", query, re.I)))
 
 
-def admit_filter(subject, graph, claimed_regex):
-    """A triple is admitted from its graph if that is its subject's owner, or if nobody claims the subject."""
-    return f'(STRSTARTS(STR({subject}), STR({graph})) || !REGEX(STR({subject}), "{claimed_regex}"))'
-
-
-def rewrite(query, claimed_regex=None, keep_projection=False, services=None):
+def rewrite(query, keep_projection=False, services=None):
     """Wrap each triple pattern of a one-pattern-per-line query in its own GRAPH clause.
 
-    With claimed_regex, each pattern only matches triples admitted under claims. A SERVICE block
-    becomes a plain group whose patterns are pinned to the graph services[endpoint]. Returns
+    A SERVICE block becomes a plain group whose patterns are pinned to the graph services[endpoint]. Returns
     (query, projection, patterns) where patterns[i] = (s, p, o) for ?g{i+1}. Unless keep_projection,
     the query selects DISTINCT * without solution modifiers (every derivation).
     """
@@ -89,7 +77,7 @@ def rewrite(query, claimed_regex=None, keep_projection=False, services=None):
         pinned = next((ns for ns in reversed(groups) if ns), None)
         if pinned:
             return f"{{ {block} FILTER ({g} = <{pinned}>) }}"
-        return f"{{ {block} FILTER {admit_filter(terms[0], g, claimed_regex)} }}" if claimed_regex else block
+        return block
 
     for line in query.splitlines():
         s = line.strip()
@@ -97,7 +85,7 @@ def rewrite(query, claimed_regex=None, keep_projection=False, services=None):
         m = re.match(r"^OPTIONAL\s*\{\s*(.+?)\s*\.?\s*\}\s*$", s, re.I)
         if service:
             if service.group(1) not in services:
-                raise ValueError(f"SERVICE <{service.group(1)}> is not an owner's endpoint")
+                raise ValueError(f"SERVICE <{service.group(1)}> is not a publisher's endpoint")
             groups.append(services[service.group(1)])
             out.append(line[:len(line) - len(line.lstrip())] + "{")
         elif m:
@@ -127,34 +115,29 @@ def rewrite(query, claimed_regex=None, keep_projection=False, services=None):
     return q, [v.lstrip("?") for v in projection], patterns
 
 
-def derivations(endpoint, query, max_rows, claimed_regex=None, services=None):
+def derivations(endpoint, query, max_rows, services=None):
     """Run the provenance query. Returns (projection, patterns, rows) or raises if too large."""
-    pquery, projection, patterns = rewrite(query, claimed_regex, services=services)
+    pquery, projection, patterns = rewrite(query, services=services)
     rows = sparql_csv(endpoint, pquery + f"\nLIMIT {max_rows + 1}")
     if len(rows) > max_rows:
         raise OverflowError(f"more than {max_rows} derivations")
     return projection, patterns, rows
 
 
-def claimed_regex(dconf, owners):
-    names = sorted(n for n, i in owners.items() if i["service"])
-    return "^" + re.escape(dconf.base) + "(" + "|".join(names) + ")/"
-
-
 class Analyzer:
-    """Reachability and categories over the owners, given the links between listings."""
+    """Reachability and categories over the publishers, given the links between listings."""
 
     def __init__(self, dconf, owners, links):
         self.base = dconf.base
         self.owners = owners
-        self.ns = {n: i["namespace"] for n, i in owners.items()}
-        self.classical = {i["namespace"] for i in owners.values() if i["classical"]}
-        self.discovered = {i["namespace"] for i in owners.values() if not i["classical"]}
-        self.reviewers = {i["namespace"] for i in owners.values() if i["kind"] == "reviewer"}
-        self.brands = {i["namespace"] for i in owners.values() if i["kind"] == "producer"}
-        self.lookup_only = {i["namespace"] for i in owners.values() if not i["service"]}
-        self.adj = defaultdict(lambda: defaultdict(set))   # product -> owner ns -> peer owner ns
-        self.holders = defaultdict(set)                     # product -> owners with a listing, and its brand
+        self.ns = {n: i["storage"] for n, i in owners.items()}
+        self.classical = {i["storage"] for i in owners.values() if i["classical"]}
+        self.discovered = {i["storage"] for i in owners.values() if not i["classical"]}
+        self.reviewers = {i["storage"] for i in owners.values() if i["kind"] == "reviewer"}
+        self.brands = {i["storage"] for i in owners.values() if i["kind"] == "producer"}
+        self.lookup_only = {i["storage"] for i in owners.values() if not i["service"]}
+        self.adj = defaultdict(lambda: defaultdict(set))   # product -> publisher storage -> peer storages
+        self.holders = defaultdict(set)                     # product -> publishers with a listing, and its brand
         for product, owner, _, peer, _ in links:
             self.adj[product][self.ns[owner]].add(self.ns[peer])
             self.holders[product] |= {self.ns[owner], self.ns[peer]}
@@ -163,14 +146,14 @@ class Analyzer:
         self.categories = ({t: {self.ns[b] for b in brands} for t, brands in json.loads(categories.read_text()).items()}
                            if categories.exists() else {})
 
-    def owner(self, iri):
+    def storage(self, iri):
         if not iri or not iri.startswith(self.base):
             return None
         rest = iri[len(self.base):]
         return f"{self.base}{rest.split('/', 1)[0]}/" if "/" in rest else None
 
     def follow(self, product, reached):
-        """Owners whose listings of product are reached through seeAlso links from reached owners."""
+        """Publishers whose listings of product are reached through seeAlso links from reached ones."""
         adj = self.adj.get(product)
         if not adj:
             return set()
@@ -183,7 +166,7 @@ class Analyzer:
 
     def reach(self, patterns, row):
         constants = {t[1:-1] for tp in patterns for t in tp if t.startswith("<")}
-        reached = set(self.classical) | {o for o in map(self.owner, constants) if o}
+        reached = set(self.classical) | {o for o in map(self.storage, constants) if o}
         reached |= set().union(*(self.categories.get(c, set()) for c in constants))
         rounds = 1
         while True:
@@ -193,7 +176,7 @@ class Analyzer:
                     values |= {row.get(t[1:]) if t.startswith("?") else t[1:-1] for t in tp if t[0] in "?<"}
             new = set()
             for value in filter(None, values):
-                o = self.owner(value)
+                o = self.storage(value)
                 if o and o not in reached:
                     new.add(o)
                 if value in self.adj:
@@ -204,10 +187,10 @@ class Analyzer:
             reached |= new
             rounds += 1
 
-    def analyse(self, projection, patterns, rows, union_rows=None, known=None):
-        """known: the namespaces of the owners the query names in SERVICE clauses. They are where
+    def analyse(self, projection, patterns, rows, known=None):
+        """known: the storages of the publishers the query names in SERVICE clauses. They are where
         discovery starts and everything else counts as discovered. Without it, the catalog is."""
-        catalog = {i["namespace"] for i in self.owners.values() if i["classical"]}
+        catalog = {i["storage"] for i in self.owners.values() if i["classical"]}
         self.classical = catalog if known is None else set(known)
         self.discovered = set(self.ns.values()) - self.classical
         solutions = defaultdict(list)
@@ -263,7 +246,7 @@ class Analyzer:
             "category": category,
             "solutions": n,
             "derivations": len(rows),
-            "classical_only_solutions": stats["classical_only"],
+            "known_only_solutions": stats["classical_only"],
             "solutions_needing_discovery": stats["needs_discovery"],
             "solutions_needing_reviewers": stats["needs_reviewers"],
             "solutions_needing_lookup_only": stats["needs_lookup_only"],
@@ -281,9 +264,4 @@ class Analyzer:
             "storages_reached_best_case": len(reached_any),
             "link_rounds": max_rounds,
         }
-        if union_rows is not None:
-            union = {tuple(r.get(v, "") for v in projection) for r in union_rows}
-            record["union_solutions"] = len(union)
-            record["solutions_only_under_union"] = len(union - set(solutions))
-            record["derivations_dropped_by_claims"] = len(union_rows) - len(rows)
         return record

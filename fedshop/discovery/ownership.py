@@ -1,14 +1,14 @@
-"""Give every triple one owner: the member whose namespace its subject is in.
+"""Restructure FedShop's data into publishers, each with its own storage.
 
 FedShop lets every shop and review site keep a full copy of each product, producer, feature and
-type it deals with, linked to a global BSBM IRI with owl:sameAs. Here:
+type it deals with, linked to a global BSBM IRI with owl:sameAs. Here each is described once:
 
-- a brand (producer) owns its products and their specification (catalog.py);
-- the taxonomy owns product types, product features and countries;
-- a shop owns its vendor record, its offers and one listing per product it sells;
-- a review site owns its record, its reviews and one page per product it reviews;
-- a reviewer owns their profile (moved out of the review site), which lists the reviews they wrote
-  with `foaf:made`, at whichever review site.
+- a brand (producer) publishes its products and their specification (catalog.py);
+- the taxonomy publishes product types, product features and countries;
+- a shop publishes its vendor record, its offers and one listing per product it sells;
+- a review site publishes its record, its reviews and one page per product it reviews;
+- a reviewer publishes their profile (moved out of the review site), which lists the reviews they
+  wrote with `foaf:made`, at whichever review site.
 
 An entity's IRI is the URL of the document that describes it plus `#it` (<base>vendor13/Offer7#it in
 document <base>vendor13/Offer7), so what a server says about the document (its size, its type,
@@ -23,8 +23,8 @@ review sites' pages, a page to a few shops' listings), and a brand's product lin
 listings ("where to buy", "reviewed at"). Peers are drawn per listing, seeded.
 
 Documents get triples that let a traversal engine follow the query (cMatch: a triple matching a
-query pattern leads to the IRIs in it). They are copies of triples the owner already has, placed
-in a second document of the same owner, so the owners' data and services don't change:
+query pattern leads to the IRIs in it). They are copies of triples the publisher already states, placed
+in a second document of the same publisher, so the data behind the services doesn't change:
 
 - a listing's document repeats `<offer> bsbm:product <listing>` of each of its offers, and a
   review page's document `<review> bsbm:reviewFor <page>` of each of its reviews;
@@ -34,8 +34,8 @@ in a second document of the same owner, so the owners' data and services don't c
 - a brand's own record (<brand>/ProducerN) repeats `<product> bsbm:producer <record>` of each of
   its products, as a brand's catalog page lists its range.
 
-Every triple is held by its subject's owner only. Everything is written as one N-Triples file per
-owner (data/<owner>.nt), with the IRIs the documents are served at. Triples placed in a document
+Everything is written as one N-Triples file per publisher (data/<publisher>.nt), with the IRIs the
+documents are served at. Triples placed in a document
 other than their subject's (the copies above) are written to placements.nq, with that document as
 graph.
 """
@@ -277,7 +277,7 @@ class Ownership:
         self.links = links
 
     def build_placements(self):
-        """Triples also placed in another document of their owner: copies for traversal."""
+        """Triples also placed in another document of their publisher: copies for traversal."""
         def place(line, doc):
             self.placements.append(f"{line[:-3]} <{doc}> .\n")
 
@@ -320,7 +320,7 @@ class Ownership:
             owners[r] = {"kind": "reviewer", "classical": False, "service": False}
         port = int(dconf.virtuoso["first_service_port"])
         for name, info in owners.items():
-            info["namespace"] = dconf.ns(name)
+            info["storage"] = dconf.ns(name)
             info["triples"] = len(self.data[name])
             if info["service"]:
                 info["port"] = port
@@ -345,12 +345,12 @@ def write(dconf, own, owners):
         old.unlink()
     for name in owners:
         Path(data_dir, f"{name}.nt").write_text("".join(sorted(set(own.data[name]))))
-    Path(dconf.path("owners.json")).write_text(json.dumps(owners, indent=2))
+    Path(dconf.path("publishers.json")).write_text(json.dumps(owners, indent=2))
     Path(dconf.path("placements.nq")).write_text("".join(sorted(set(own.placements))))
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(own.categories.items())}, indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
         writer = csv.writer(fs, delimiter="\t")
-        writer.writerow(["product", "owner", "from", "peer", "to"])
+        writer.writerow(["product", "publisher", "from", "peer", "to"])
         writer.writerows(own.links)
 
 

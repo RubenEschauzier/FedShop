@@ -1,13 +1,13 @@
 """One document per subject, written by rdf-dataset-fragmenter and served by the Community Solid Server.
 
-- The main pass runs the fragmenter's CLI with its subject strategy over every owner's data: a
+- The main pass runs the fragmenter's CLI with its subject strategy over every publisher's data: a
   triple goes to the document of its subject (without fragment), so <base>vendor13/Offer7#it is
   described in <base>vendor13/Offer7 and <base>taxonomy/countries holds all countries.
 - Triples that belong in another document than their subject's (placements.nq: offers in their
   listing, reviews in their page and products in their brand's category pages, for traversal) are placed in one more fragmenter run (tools/fragmenter/place.js).
-- Every owner's namespace is a storage root. Its metadata (.meta, read by CSS) types it as a
+- Every publisher's directory is a storage root. Its metadata (.meta, read by CSS) types it as a
   pim:Storage, which CSS advertises with a `Link: <pim:Storage>; rel="type"` header, and, for
-  owners with a query service, names that service with void:sparqlEndpoint. CSS lists the root's
+  publishers with a query service, names that service with void:sparqlEndpoint. CSS lists the root's
   documents with ldp:contains.
 - The server root itself is not readable (its ACL only grants read access to what is below it),
   so it can't be used as an index of all storages.
@@ -74,7 +74,7 @@ def run(dconf, owners):
                     dconf.base, str(web_dir)], check=True)
 
     for name, info in owners.items():
-        ns = info["namespace"]
+        ns = info["storage"]
         meta = [f"<{ns}> <{RDF_TYPE}> <{PIM_STORAGE}> .\n"]
         if info["service"]:
             meta.append(f"<{ns}> <{VOID_ENDPOINT}> <{info['endpoint']}> .\n")

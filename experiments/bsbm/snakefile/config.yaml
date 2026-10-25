@@ -168,6 +168,10 @@ discovery:
   css:
     port: 3000
     config: "${generation.workdir}/discovery/css-config.json"
+  proxy:                         # counting proxy on the public ports (css.port, the service ports); engines only see it
+    port_offset: 10000           # the Solid server and Virtuoso's services listen on their public port + this
+    control_port: 3999           # GET /stats, POST /reset
+    max_inflight: 48             # requests to Virtuoso at once; the rest wait in the proxy
   workload:
     per_template: 5
     max_candidates: 40

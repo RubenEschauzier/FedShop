@@ -1,4 +1,5 @@
-# Query services of the discovery benchmark: one graph per owner, one virtual endpoint per composite.
+# Query services of the discovery benchmark: one graph per publisher, one virtual endpoint per
+# publisher with a service, on the internal ports behind the counting proxy (tools/proxy).
 # Runs next to FedShop's own containers, on its own ports (discovery.virtuoso in the config must match).
 name: fedshop-discovery
 services:
@@ -10,15 +11,22 @@ services:
       DBA_PASSWORD: "dba"
       VIRT_Parameters_ServerPort: 1112
       VIRT_HTTPServer_ServerPort: 8891
-      VIRT_HTTPServer_ServerThreads: 20
-      VIRT_HTTPServer_MaxClientConnections: 20
+      # Every query service shares this server. Virtuoso's defaults (10 idle keep-alive connections,
+      # 20 HTTP threads) silently drop reused connections and time out bursts of requests, so engines
+      # failed with "fetch failed". Tested: 60 idle keep-alive connections, 29 dropped at the
+      # defaults, none with these values.
+      VIRT_HTTPServer_ServerThreads: 64
+      VIRT_HTTPServer_MaxClientConnections: 64
+      VIRT_HTTPServer_MaxKeepAlives: 64
+      VIRT_HTTPServer_KeepAliveTimeout: 30
       VIRT_SPARQL_MaxQueryCostEstimationTime: 0
       VIRT_SPARQL_ResultSetMaxRows: 0
       VIRT_SPARQL_MaxQueryExecutionTime: 0
       VIRT_Parameters_NumberOfBuffers: 340000
       VIRT_Parameters_MaxDirtyBuffers: 250000
       VIRT_Parameters_MaxQueryMem: 2G
-      VIRT_Parameters_MaxClientConnections: 20
+      VIRT_Parameters_ServerThreads: 100
+      VIRT_Parameters_MaxClientConnections: 100
       VIRT_Parameters_CheckpointInterval: 0
       VIRT_Parameters_DefaultIsolation: 1
     volumes:

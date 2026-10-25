@@ -32,6 +32,7 @@ DEFAULTS = {
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
                  "http_port": 8891, "first_service_port": 34300},
     "css": {"port": 3000, "config": None},
+    "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48},
     "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
 }
 
@@ -63,6 +64,7 @@ class DiscoveryConfig:
         self.links_conf = merged("links")
         self.virtuoso = merged("virtuoso")
         self.css = merged("css")
+        self.proxy = merged("proxy")
         self.workload_conf = merged("workload")
         self.outdir = section.get("workdir") or f"{self.workdir}/benchmark/discovery"
         self.dataset_dir = f"{self.outdir}/members"       
@@ -79,6 +81,10 @@ class DiscoveryConfig:
     @property
     def endpoint(self):
         return f"http://localhost:{self.virtuoso['http_port']}/sparql"
+
+    def internal_port(self, port):
+        """Where the server behind the proxy listens for a public port (documents or a query service)."""
+        return int(port) + int(self.proxy["port_offset"])
 
     def ns(self, owner):
         return f"{self.base}{owner}/"
@@ -98,7 +104,7 @@ def owner_of(dconf, iri):
 
 
 def load_owners(dconf):
-    with open(dconf.path("owners.json")) as fs:
+    with open(dconf.path("publishers.json")) as fs:
         return json.load(fs)
 
 

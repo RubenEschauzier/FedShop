@@ -8,19 +8,19 @@ has to be discovered. Each template states in its header:
 - `kind`: lookup, product (one product across members), analytical, or control (answered by its
   SERVICE clauses alone);
 - `rows`: the range of answer sizes its instances must have;
-- `discovered`: how many owners outside its SERVICE clauses an answer must involve, at least.
+- `discovered`: how many publishers outside its SERVICE clauses an answer must involve, at least.
 
 Values are chosen per template from the data, seeded, aiming at the size range: thresholds are set
 from the values of the products they filter, products are drawn from those with enough reviews or
-offers. A candidate is kept when its reference answer (claim semantics) has a size within range,
-and, unless it is a control, part of it needs a discovered owner, can be reached, and involves at
-least `discovered` owners beyond the named ones. Delegation gains are reported, not selected on.
+offers. A candidate is kept when its reference answer has a size within range, and, unless it is a
+control, part of it needs a discovered publisher, can be reached, and involves at least
+`discovered` publishers beyond the named ones. Delegation gains are reported, not selected on.
 
-Every kept instance gets injected.sparql, results.csv (claim semantics), union-results.csv (every
-triple admitted outside SERVICE clauses, as an engine merging all sources gets), reachable.csv and
-analysis.json. Its plain form, plain.sparql, is the same query without SERVICE clauses, for engines
-that select sources themselves (given the catalog's endpoints); it has its own answers,
-plain-results.csv and plain-union-results.csv, since without SERVICE a pattern matches any owner.
+Every kept instance gets injected.sparql, results.csv (its answer over all published data, with
+SERVICE patterns answered by their service), reachable.csv and analysis.json. Its plain form,
+plain.sparql, is the same query without SERVICE clauses, for engines that select sources
+themselves (given the catalog's endpoints); it has its own answer, plain-results.csv, since without
+SERVICE a pattern matches any publisher.
 """
 import csv
 import io
@@ -33,10 +33,9 @@ from pathlib import Path
 
 from .common import BSBM, FS, LOGGER, RDF_TYPE, RDFS_LABEL, load_owners, owner_of, sparql_csv, sparql_raw_csv
 from .ownership import read_links
-from .provenance import MODIFIERS, TERM, Analyzer, _expand, claimed_regex, derivations, rewrite, service_endpoints
+from .provenance import MODIFIERS, TERM, Analyzer, _expand, derivations, rewrite, service_endpoints
 
-FIELDS = ["query", "instance", "kind", "selected", "reason", "category", "solutions", "union_solutions",
-          "solutions_only_under_union", "derivations_dropped_by_claims", "reachable_share",
+FIELDS = ["query", "instance", "kind", "selected", "reason", "category", "solutions", "reachable_share",
           "reachable_needing_discovery", "reachable_mixed", "discovered_in_answer", "solutions_needing_reviewers",
           "solutions_needing_lookup_only", "brands_needed", "lookup_only_needed", "storages_needed",
           "storages_reached_best_case", "link_rounds", "max_gain", "gain_at", "reference_rows", "values", "error"]
@@ -44,8 +43,6 @@ PREFIXES = """PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocab
 PREFIX fs: <http://fedshop.example.org/vocab#>
 PREFIX rev: <http://purl.org/stuff/rev#>
 """
-OWN = "FILTER(STRSTARTS(STR({}), STR(?g)))"
-
 
 def template_meta(text):
     """The header of a template: kind, rows (lo, hi) and discovered."""
@@ -56,7 +53,7 @@ def template_meta(text):
 
 # ----- values -----
 class Values:
-    """What the templates' values are drawn from, read from the owners' graphs."""
+    """What the templates' values are drawn from, read from the publishers' graphs."""
 
     def __init__(self, dconf, owners):
         self.dconf = dconf
@@ -69,22 +66,22 @@ class Values:
 
         self.offers_at = defaultdict(lambda: defaultdict(list))   # shop -> product -> offers
         self.offer_count = Counter()
-        for r in self.rows(f"SELECT ?g ?x ?o WHERE {{ GRAPH ?g {{ ?l fs:listingOf ?x . ?o bsbm:product ?l }} {OWN.format('?l')} }}"):
+        for r in self.rows("SELECT ?g ?x ?o WHERE { GRAPH ?g { ?l fs:listingOf ?x . ?o bsbm:product ?l } }"):
             self.offers_at[owner_of(dconf, r["g"])][r["x"]].append(r["o"])
             self.offer_count[r["x"]] += 1
         self.sold = sorted(self.offer_count)
         self.reviews_at = defaultdict(list)                         # site -> reviews
         self.review_count, self.english_count = Counter(), Counter()
         self.review_sites = defaultdict(set)
-        for r in self.rows(f"SELECT ?g ?x ?r ?lang WHERE {{ GRAPH ?g {{ ?l fs:listingOf ?x . ?r bsbm:reviewFor ?l . ?r rev:text ?t }} "
-                           f"BIND(lang(?t) AS ?lang) {OWN.format('?l')} }}"):
+        for r in self.rows("SELECT ?g ?x ?r ?lang WHERE { GRAPH ?g { ?l fs:listingOf ?x . ?r bsbm:reviewFor ?l . ?r rev:text ?t } "
+                           "BIND(lang(?t) AS ?lang) }"):
             site = owner_of(dconf, r["g"])
             self.reviews_at[site].append(r["r"])
             self.review_count[r["x"]] += 1
             self.english_count[r["x"]] += r["lang"] == "en"
             self.review_sites[r["x"]].add(site)
         self.reviewed = sorted(self.review_count)
-        listed = f"GRAPH ?h {{ ?l fs:listingOf ?x }} GRAPH ?g {{ ?x ?p ?v }} {OWN.format('?x')}"
+        listed = "GRAPH ?h { ?l fs:listingOf ?x } GRAPH ?g { ?x ?p ?v }"
         self.types, self.features, self.label, self.num = defaultdict(list), defaultdict(list), {}, defaultdict(dict)
         taxonomy = dconf.ns("taxonomy")
         for r in self.rows(f"SELECT DISTINCT ?x ?p ?v WHERE {{ {listed} FILTER(?p IN (rdf:type, bsbm:productFeature, rdfs:label, "
@@ -274,7 +271,7 @@ def gains(dconf, owners, query, patterns, rows, known, per_service=3):
     layout = pattern_layout(query)
     if len(layout) != len(patterns):
         return []
-    services = {i["namespace"]: n for n, i in owners.items() if i["service"]}
+    services = {i["storage"]: n for n, i in owners.items() if i["service"]}
     required = [i for i, (_, optional, _) in enumerate(layout, start=1) if not optional]
     fl = filters(query)
     subqueries = defaultdict(set)
@@ -304,14 +301,14 @@ def gains(dconf, owners, query, patterns, rows, known, per_service=3):
     return out
 
 
-def reference_query(text, regex, services):
-    """The query under claim semantics (or, without regex, union semantics), with its own projection and modifiers.
+def reference_query(text, services):
+    """The query over all published data, with its own projection and modifiers.
 
-    Each pattern only matches admitted triples; SERVICE patterns match their service's graph. Graph
+    Each pattern matches any publisher's graph; SERVICE patterns match their service's graph. Graph
     variables are projected away inside a DISTINCT subquery over the query's own variables, so a
-    triple admitted from two graphs counts once, as it does in the union of graphs.
+    triple found in two graphs counts once, as it does in the union of graphs.
     """
-    inner, _, patterns = rewrite(text, regex, services=services)
+    inner, _, patterns = rewrite(text, services=services)
     prefix_lines = [l for l in text.splitlines() if l.strip().upper().startswith("PREFIX")]
     select = re.search(r"SELECT\s+.*?(?=\s+WHERE)", text, re.S | re.I).group(0)
     modifiers = "\n".join(m.group(0) for m in MODIFIERS.finditer(text))
@@ -340,35 +337,32 @@ def plain_query(text):
     return "\n".join(l for k, l in enumerate(lines) if k not in drop) + "\n"
 
 
-def write_plain(dconf, inst, regex, services):
-    """plain.sparql and its answers for one instance directory."""
+def write_plain(dconf, inst, services):
+    """plain.sparql and its answer for one instance directory."""
     text = Path(inst, "injected.sparql").read_text()
     plain = plain_query(text)
     Path(inst, "plain.sparql").write_text(plain)
     if plain == text:
         shutil.copy(Path(inst, "results.csv"), Path(inst, "plain-results.csv"))
-        shutil.copy(Path(inst, "union-results.csv"), Path(inst, "plain-union-results.csv"))
     else:
-        Path(inst, "plain-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, regex, services)))
-        Path(inst, "plain-union-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, None, services)))
+        Path(inst, "plain-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, services)))
 
 
 def plain_forms(dconf):
     """Write the plain form of every instance of an existing workload."""
     owners = load_owners(dconf)
-    regex, services = claimed_regex(dconf, owners), service_map(owners)
+    services = service_map(owners)
     insts = sorted(Path(dconf.outdir, "workload").glob("q*/instance_*"))
     for inst in insts:
-        write_plain(dconf, inst, regex, services)
+        write_plain(dconf, inst, services)
     return insts
 
 
 # ----- writing -----
-def write_instance(outdir, text, record, reference, union_reference, projection, reachable):
+def write_instance(outdir, text, record, reference, projection, reachable):
     Path(outdir).mkdir(parents=True, exist_ok=True)
     Path(outdir, "injected.sparql").write_text(text)
     Path(outdir, "results.csv").write_text(reference)
-    Path(outdir, "union-results.csv").write_text(union_reference)
     rows = list(csv.reader(io.StringIO(reference)))
     header = rows[0] if rows else []
     with open(Path(outdir, "reachable.csv"), "w", newline="") as fs:
@@ -383,32 +377,31 @@ def write_sources(dconf, owners):
     catalog = {n: i for n, i in owners.items() if i["classical"]}
     with open(outdir / "catalog-endpoints.tsv", "w") as fs:
         for name, info in catalog.items():
-            fs.write(f"{name}\t{info['namespace']}\t{info['endpoint']}\n")
+            fs.write(f"{name}\t{info['storage']}\t{info['endpoint']}\n")
     with open(outdir / "catalog-fedx.ttl", "w") as fs:
         fs.write("@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n"
                  "@prefix fedx: <http://rdf4j.org/config/federation#> .\n\n")
         for info in catalog.values():
-            fs.write(f'<{info["namespace"]}> a sd:Service ;\n    fedx:store "SPARQLEndpoint";\n'
+            fs.write(f'<{info["storage"]}> a sd:Service ;\n    fedx:store "SPARQLEndpoint";\n'
                      f'    sd:endpoint "{info["endpoint"]}";\n    fedx:supportsASKQueries true .\n\n')
     with open(outdir / "discovered-storages.tsv", "w") as fs:   # for analysis only: an engine has to find these
         for name, info in owners.items():
             if not info["classical"]:
-                fs.write(f"{name}\t{info['namespace']}\t{info.get('endpoint') or ''}\n")
+                fs.write(f"{name}\t{info['storage']}\t{info.get('endpoint') or ''}\n")
 
 
 def service_map(owners):
-    """Endpoint -> namespace of every owner with a service."""
-    return {i["endpoint"]: i["namespace"] for i in owners.values() if i["service"]}
+    """Endpoint -> storage of every publisher with a service."""
+    return {i["endpoint"]: i["storage"] for i in owners.values() if i["service"]}
 
 
-def analyse(dconf, owners, analyzer, regex, text):
+def analyse(dconf, owners, analyzer, text):
     max_rows = dconf.workload_conf["max_rows"]
     services = service_map(owners)
     endpoints = service_endpoints(text)
     known = {services[e] for e in endpoints if e in services} if endpoints else None
-    projection, patterns, rows = derivations(dconf.endpoint, text, max_rows, regex, services)
-    _, _, union_rows = derivations(dconf.endpoint, text, max_rows, None, services)
-    record = analyzer.analyse(projection, patterns, rows, union_rows, known=known if known is not None else set())
+    projection, patterns, rows = derivations(dconf.endpoint, text, max_rows, services)
+    record = analyzer.analyse(projection, patterns, rows, known=known if known is not None else set())
     record["gains"] = gains(dconf, owners, text, patterns, rows, known or set())
     discovered = [g for g in record["gains"] if not g["known"]]
     best = max(discovered, key=lambda g: g["gain"], default=None)
@@ -420,7 +413,6 @@ def analyse(dconf, owners, analyzer, regex, text):
 def build(dconf):
     owners = load_owners(dconf)
     analyzer = Analyzer(dconf, owners, read_links(dconf))
-    regex = claimed_regex(dconf, owners)
     values = Values(dconf, owners)
     conf = dconf.workload_conf
     outdir = Path(dconf.outdir, "workload")
@@ -439,7 +431,7 @@ def build(dconf):
             text = fill(template, vals)
             record = {"query": query, "instance": kept, "kind": meta["kind"], "values": vals}
             try:
-                result, projection, reachable = analyse(dconf, owners, analyzer, regex, text)
+                result, projection, reachable = analyse(dconf, owners, analyzer, text)
                 record.update(result)
             except (OverflowError, RuntimeError, ValueError) as e:
                 record.update({"selected": False, "reason": "error", "error": str(e)[:300]})
@@ -454,20 +446,16 @@ def build(dconf):
             elif not control and record["reachable_needing_discovery"] == 0:
                 reason = "no reachable answer needs discovery"
             elif not control and record["discovered_in_answer"] < meta["discovered"]:
-                reason = f"{record['discovered_in_answer']} discovered owners, not {meta['discovered']}"
+                reason = f"{record['discovered_in_answer']} discovered publishers, not {meta['discovered']}"
             else:
                 reason = ""
             record["selected"] = not reason
             record["reason"] = reason or "kept"
             if record["selected"]:
-                reference = sparql_raw_csv(dconf.endpoint, reference_query(text, regex, services))
-                union_reference = sparql_raw_csv(dconf.endpoint, reference_query(text, None, services))
-                if set(reference.splitlines()[1:]) != set(union_reference.splitlines()[1:]):
-                    LOGGER.warning(f"{query}#{kept}: claims change the answer, so some owner holds another's triples")
+                reference = sparql_raw_csv(dconf.endpoint, reference_query(text, services))
                 record["reference_rows"] = max(len(reference.strip().splitlines()) - 1, 0)
-                write_instance(outdir / query / f"instance_{kept}", text, record, reference, union_reference,
-                               projection, reachable)
-                write_plain(dconf, outdir / query / f"instance_{kept}", regex, services)
+                write_instance(outdir / query / f"instance_{kept}", text, record, reference, projection, reachable)
+                write_plain(dconf, outdir / query / f"instance_{kept}", services)
                 kept += 1
             records.append(record)
         LOGGER.info(f"{query}: kept {kept}/{conf['per_template']} after {tried} candidates")
@@ -488,5 +476,5 @@ def build(dconf):
 def check(dconf, text):
     owners = load_owners(dconf)
     analyzer = Analyzer(dconf, owners, read_links(dconf))
-    record, _, _ = analyse(dconf, owners, analyzer, claimed_regex(dconf, owners), text)
+    record, _, _ = analyse(dconf, owners, analyzer, text)
     return record
