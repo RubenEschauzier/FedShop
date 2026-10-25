@@ -13,7 +13,7 @@ from ..utils import fedshop_logger, load_config
 LOGGER = fedshop_logger(Path(__file__).name)
 
 BSBM = "http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/"
-FS = "http://fedshop.example.org/vocab#"           # benchmark vocabulary: fs:listingOf, fs:Listing
+FS = "http://fedshop.example.org/vocab#"        
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 SEEALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"
