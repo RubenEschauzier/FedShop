@@ -1,6 +1,5 @@
-// Places triples in documents other than their subject's: cached specs in the listing that carries
-// them, the copies for traversal (offers in their listing, reviews in their page, a brand's products
-// in its category pages).
+// Places triples in documents other than their subject's: the copies for traversal (offers in their
+// listing, reviews in their page, a brand's products in its category pages).
 //
 // The input is N-Quads whose graph names the target document. rdf-dataset-fragmenter writes them
 // with a strategy that sends each quad to its graph's document and drops the graph. The file sink

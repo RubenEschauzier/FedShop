@@ -3,7 +3,7 @@ from pathlib import Path
 
 import click
 
-from . import catalog, css, engine, fragment, ownership, store, traversal, workload
+from . import catalog, css, engine, fragment, ownership, store, workload
 from .common import DiscoveryConfig, load_owners
 
 
@@ -19,16 +19,22 @@ CONFIG = click.argument("configfile", type=click.Path(exists=True, dir_okay=Fals
 @CONFIG
 @click.option("--force", is_flag=True, default=False, help="Regenerate even if the brand catalog exists")
 def catalog_cmd(configfile, force):
-    """Generate the brand catalogs, shops and review sites with FedShop's WatDiv templates (catalog/, members/)."""
-    dconf = DiscoveryConfig(configfile)
-    catalog.generate(dconf, force=force)
-    catalog.generate_members(dconf, force=force)
+    """Generate the brand catalogs with FedShop's product template (catalog/)."""
+    catalog.generate(DiscoveryConfig(configfile), force=force)
+
+
+@cli.command()
+@CONFIG
+@click.option("--force", is_flag=True, default=False, help="Regenerate members that already exist")
+def members(configfile, force):
+    """Generate the shops and review sites with FedShop's vendor and rating-site templates (members/)."""
+    catalog.generate_members(DiscoveryConfig(configfile), force=force)
 
 
 @cli.command()
 @CONFIG
 def own(configfile):
-    """Give every triple its owner: data/<owner>.nt, owners.json, links.tsv, replicas.json."""
+    """Give every triple its owner: data/<owner>.nt, owners.json, links.tsv, placements.nq."""
     click.echo(json.dumps(ownership.run(DiscoveryConfig(configfile)), indent=2))
 
 
@@ -80,17 +86,6 @@ def plain(configfile):
     click.echo(f"{len(workload.plain_forms(dconf))} plain forms written")
 
 
-@cli.command()
-@CONFIG
-@click.option("--timeout", default=600, help="Seconds per instance before its process is killed")
-@click.option("--workers", default=4)
-def traverse(configfile, timeout, workers):
-    """Simulate link traversal on every instance: documents reached, answer complete or not (traversal.json)."""
-    rows = traversal.run(DiscoveryConfig(configfile), timeout=timeout, workers=workers)
-    click.echo(f"{sum(bool(r.get('complete')) for r in rows)}/{len(rows)} instances complete by traversal, "
-               f"see {DiscoveryConfig(configfile).path('traversal-summary.csv')}")
-
-
 @cli.command("run-comunica")
 @CONFIG
 @click.option("--name", required=True, help="Run directory: <outdir>/runs/<name>; an existing run with the same settings resumes")
@@ -126,13 +121,14 @@ def check(configfile, queryfile):
 @CONFIG
 @click.pass_context
 def all_steps(ctx, configfile):
-    """catalog, own, load, fragment, build-workload and traverse in one go."""
+    """catalog, members, own, load, fragment, build-workload and plain in one go."""
     ctx.invoke(catalog_cmd, configfile=configfile, force=False)
+    ctx.invoke(members, configfile=configfile, force=False)
     ctx.invoke(own, configfile=configfile)
     ctx.invoke(load, configfile=configfile)
     ctx.invoke(fragment_cmd, configfile=configfile)
     ctx.invoke(build_workload, configfile=configfile)
-    ctx.invoke(traverse, configfile=configfile, timeout=600, workers=4)
+    ctx.invoke(plain, configfile=configfile)
 
 
 if __name__ == "__main__":

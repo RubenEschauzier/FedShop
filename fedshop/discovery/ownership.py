@@ -22,10 +22,6 @@ Listings of the same product link to each other with rdfs:seeAlso (a shop's list
 review sites' pages, a page to a few shops' listings), and a brand's product links to a few
 listings ("where to buy", "reviewed at"). Peers are drawn per listing, seeded.
 
-Some listings carry a cached copy of the brand's spec sheet: triples whose subject is the brand's
-product, held by the shop or review site. Some of those copies are stale. Under the claims of the
-brands' query services they are dropped; for lookup-only brands nobody claims them.
-
 Documents get triples that let a traversal engine follow the query (cMatch: a triple matching a
 query pattern leads to the IRIs in it). They are copies of triples the owner already has, placed
 in a second document of the same owner, so the owners' data and services don't change:
@@ -38,10 +34,10 @@ in a second document of the same owner, so the owners' data and services don't c
 - a brand's own record (<brand>/ProducerN) repeats `<product> bsbm:producer <record>` of each of
   its products, as a brand's catalog page lists its range.
 
-Everything is written as one N-Triples file per owner (data/<owner>.nt, plus
-data/<owner>.replicas.nt for cached specs), with the IRIs the documents are served at. Triples
-placed in a document other than their subject's (cached specs, the copies above) are written to
-placements.nq, with that document as graph.
+Every triple is held by its subject's owner only. Everything is written as one N-Triples file per
+owner (data/<owner>.nt), with the IRIs the documents are served at. Triples placed in a document
+other than their subject's (the copies above) are written to placements.nq, with that document as
+graph.
 """
 import csv
 import json
@@ -56,7 +52,6 @@ from .common import BSBM, COUNTRIES, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABE
 FEDSHOP_MEMBER = re.compile(r"^http://www\.((?:vendor|ratingsite)\d+)\.fr/(.*)$")
 GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
 LOCAL = re.compile(r"^([A-Za-z]+)(\d+)$")
-NUMERIC = [f"{BSBM}productPropertyNumeric{i}" for i in range(1, 6)]
 DC_PUBLISHER = "http://purl.org/dc/elements/1.1/publisher"
 REV_REVIEWER = "http://purl.org/stuff/rev#reviewer"
 FOAF_MADE = "http://xmlns.com/foaf/0.1/made"
@@ -128,8 +123,6 @@ class Ownership:
         self.catalog = Catalog(dconf)
         self.members = sorted(dconf.member_names, key=lambda n: (kind_of(n), number(n)))  # vendorN, ratingsiteN
         self.data = defaultdict(list)          # owner -> N-Triples lines
-        self.replicas = defaultdict(list)      # owner -> N-Triples lines of cached specs
-        self.replica_docs = []                 # {owner, doc, product, stale, triples}
         self.placements = []                   # N-Quads lines: a triple and the document it is also placed in
         self.categories = defaultdict(set)     # type IRI -> brands with a category page for it
         self.listings = defaultdict(dict)      # product number -> {owner: listing IRI}
@@ -234,18 +227,14 @@ class Ownership:
         return out
 
     def build_brands(self):
-        self.specs = {}
         for brand in range(self.catalog.count):
             name = self.brand_name(brand)
             for s, p, o in self.catalog.producer(brand):
                 if p != f"<{OWL_SAMEAS}>":
                     self.data[name].append(nt(f"<{self.producer_iri(brand)}>", p, self.map_term(o)))
         for n in range(self.catalog.n):
-            triples = self.spec(n)
-            if n in self.listings:
-                self.specs[n] = triples
             name = self.brand_name(self.catalog.brand_of[n])
-            self.data[name].extend(nt(*t) for t in triples)
+            self.data[name].extend(nt(*t) for t in self.spec(n))
 
     def build_taxonomy(self):
         for path in self.catalog.taxonomy_files():
@@ -255,7 +244,7 @@ class Ownership:
         for code in sorted(self.countries):
             self.data["taxonomy"].append(nt(f"<{self.dconf.ns('taxonomy')}countries#{code}>", f"<{RDFS_LABEL}>", f'"{code}"'))
 
-    # ----- links and cached specs -----
+    # ----- links -----
     def build_links(self):
         conf = self.dconf.links_conf
         links = []
@@ -287,35 +276,11 @@ class Ownership:
             self.data[owner].append(nt(f"<{source}>", f"<{SEEALSO}>", f"<{target}>"))
         self.links = links
 
-    def build_replicas(self):
-        conf = self.dconf.replicas_conf
-        share, stale = float(conf["share"]), float(conf["stale"])
-        for n in sorted(self.listings):
-            spec = [t for t in self.specs[n] if t[1] in (f"<{RDFS_LABEL}>", *(f"<{p}>" for p in NUMERIC))]
-            for member, listing in sorted(self.listings[n].items()):
-                rng = random.Random(f"{conf['seed']}|{doc(listing)}")
-                if rng.random() >= share:
-                    continue
-                is_stale = rng.random() < stale
-                triples = []
-                for s, p, o in spec:
-                    if is_stale and p != f"<{RDFS_LABEL}>":
-                        value = int(re.match(r'^"(\d+)"', o).group(1))
-                        value = min(2000, max(1, value + rng.choice((-1, 1)) * rng.randint(50, 400)))
-                        o = f'"{value}"^^<http://www.w3.org/2001/XMLSchema#integer>'
-                    triples.append(nt(s, p, o))
-                self.replicas[member].extend(triples)
-                self.replica_docs.append({"owner": member, "doc": doc(listing), "product": self.product_iri(n),
-                                          "stale": is_stale, "triples": "".join(triples)})
-
     def build_placements(self):
-        """Triples also placed in another document of their owner: cached specs, copies for traversal."""
+        """Triples also placed in another document of their owner: copies for traversal."""
         def place(line, doc):
             self.placements.append(f"{line[:-3]} <{doc}> .\n")
 
-        for d in self.replica_docs:
-            for line in d["triples"].splitlines(keepends=True):
-                place(line, d["doc"])
         backlinks = (f"<{BSBM}product>", f"<{BSBM}reviewFor>")
         for member in self.members:
             for line in self.data[member]:
@@ -356,8 +321,7 @@ class Ownership:
         port = int(dconf.virtuoso["first_service_port"])
         for name, info in owners.items():
             info["namespace"] = dconf.ns(name)
-            info["triples"] = len(self.data[name]) + len(self.replicas[name])
-            info["cached_specs"] = len([d for d in self.replica_docs if d["owner"] == name])
+            info["triples"] = len(self.data[name])
             if info["service"]:
                 info["port"] = port
                 info["endpoint"] = f"http://localhost:{port}/{name}/sparql"
@@ -371,7 +335,6 @@ class Ownership:
         self.build_brands()
         self.build_taxonomy()
         self.build_links()
-        self.build_replicas()
         self.build_placements()
         return self.owners()
 
@@ -382,10 +345,7 @@ def write(dconf, own, owners):
         old.unlink()
     for name in owners:
         Path(data_dir, f"{name}.nt").write_text("".join(sorted(set(own.data[name]))))
-        if own.replicas[name]:
-            Path(data_dir, f"{name}.replicas.nt").write_text("".join(sorted(set(own.replicas[name]))))
     Path(dconf.path("owners.json")).write_text(json.dumps(owners, indent=2))
-    Path(dconf.path("replicas.json")).write_text(json.dumps(own.replica_docs, indent=1))
     Path(dconf.path("placements.nq")).write_text("".join(sorted(set(own.placements))))
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(own.categories.items())}, indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
@@ -412,8 +372,6 @@ def run(dconf):
         k["triples"] += info["triples"]
     summary = {"owners": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in own.listings.values()), "listed_products": len(own.listings),
-               "links": len(own.links), "cached_specs": len(own.replica_docs),
-               "stale_cached_specs": sum(d["stale"] for d in own.replica_docs),
-               "placed_triples": len(own.placements), "category_pages": sum(len(b) for b in own.categories.values())}
+               "links": len(own.links), "placed_triples": len(own.placements), "category_pages": sum(len(b) for b in own.categories.values())}
     LOGGER.info(json.dumps(summary))
     return summary

@@ -56,7 +56,7 @@ def template_meta(text):
 
 # ----- values -----
 class Values:
-    """What the templates' values are drawn from, read from the owners' graphs (cached specs excluded)."""
+    """What the templates' values are drawn from, read from the owners' graphs."""
 
     def __init__(self, dconf, owners):
         self.dconf = dconf
@@ -107,9 +107,6 @@ class Values:
             "SELECT ?r (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?x bsbm:rating1 ?r } } GROUP BY ?r")}
         reviews = sum(self.review_count.values())
         self.rating_share = {r: sum(n for k, n in ratings.items() if k >= r) / reviews for r in range(1, 11)}
-        cached = json.loads(Path(dconf.path("replicas.json")).read_text())
-        self.stale = sorted({c["product"] for c in cached if c["stale"]})
-        self.cached = sorted({c["product"] for c in cached} - set(self.stale))
 
     def rows(self, query):
         return sparql_csv(self.endpoint, PREFIXES + "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n"
@@ -117,17 +114,6 @@ class Values:
 
     def endpoint_of(self, name):
         return self.owners[name]["endpoint"]
-
-    def claim_cases(self, rng, pool):
-        """Products with a stale cached spec first, then a fresh one, then the rest: what claims change."""
-        pool = set(pool)
-        groups = [[p for p in self.stale if p in pool], [p for p in self.cached if p in pool],
-                  sorted(pool - set(self.stale) - set(self.cached))]
-        out = []
-        for group in groups:
-            rng.shuffle(group)
-            out += group
-        return out
 
 
 def rating_threshold(values, reviews, target):
@@ -171,10 +157,10 @@ def candidates(values, query, rng, limit, meta):
                        "x": threshold_above([values.num[p].get(1, 0) for p in pool], half),
                        "y": threshold_above([values.num[p].get(2, 0) for p in values.of_type[other] & sold], half)}
     elif query == "q02":
-        for product in values.claim_cases(rng, values.label)[:limit]:
+        for product in shuffled(values.label)[:limit]:
             yield {"Product": product, "Taxonomy": values.taxonomy}
     elif query == "q05":
-        for product in values.claim_cases(rng, sold)[:limit]:
+        for product in shuffled(sold)[:limit]:
             if values.types[product] and len(values.num[product]) >= 2:
                 yield {"Product": product, "ProductType": rng.choice(sorted(values.types[product]))}
     elif query == "q06":
@@ -323,8 +309,7 @@ def reference_query(text, regex, services):
 
     Each pattern only matches admitted triples; SERVICE patterns match their service's graph. Graph
     variables are projected away inside a DISTINCT subquery over the query's own variables, so a
-    triple admitted from two graphs (a fresh cached copy of a lookup-only brand's spec) counts once,
-    as it does in the union of graphs.
+    triple admitted from two graphs counts once, as it does in the union of graphs.
     """
     inner, _, patterns = rewrite(text, regex, services=services)
     prefix_lines = [l for l in text.splitlines() if l.strip().upper().startswith("PREFIX")]
@@ -477,6 +462,8 @@ def build(dconf):
             if record["selected"]:
                 reference = sparql_raw_csv(dconf.endpoint, reference_query(text, regex, services))
                 union_reference = sparql_raw_csv(dconf.endpoint, reference_query(text, None, services))
+                if set(reference.splitlines()[1:]) != set(union_reference.splitlines()[1:]):
+                    LOGGER.warning(f"{query}#{kept}: claims change the answer, so some owner holds another's triples")
                 record["reference_rows"] = max(len(reference.strip().splitlines()) - 1, 0)
                 write_instance(outdir / query / f"instance_{kept}", text, record, reference, union_reference,
                                projection, reachable)

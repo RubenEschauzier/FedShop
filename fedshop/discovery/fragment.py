@@ -3,9 +3,8 @@
 - The main pass runs the fragmenter's CLI with its subject strategy over every owner's data: a
   triple goes to the document of its subject (without fragment), so <base>vendor13/Offer7#it is
   described in <base>vendor13/Offer7 and <base>taxonomy/countries holds all countries.
-- Triples that belong in another document than their subject's (placements.nq: cached specs in
-  their listing; offers in their listing, reviews in their page and products in their brand's
-  category pages, for traversal) are placed in one more fragmenter run (tools/fragmenter/place.js).
+- Triples that belong in another document than their subject's (placements.nq: offers in their
+  listing, reviews in their page and products in their brand's category pages, for traversal) are placed in one more fragmenter run (tools/fragmenter/place.js).
 - Every owner's namespace is a storage root. Its metadata (.meta, read by CSS) types it as a
   pim:Storage, which CSS advertises with a `Link: <pim:Storage>; rel="type"` header, and, for
   owners with a query service, names that service with void:sparqlEndpoint. CSS lists the root's

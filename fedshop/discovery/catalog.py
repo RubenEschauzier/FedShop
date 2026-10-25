@@ -10,6 +10,28 @@
 
 Products are then given to brands by size: brand k gets a share proportional to (k+1)^-zipf, with
 at least `min_products`, so a few brands are big and the long tail stays moderate.
+
+`dconf` is a common.DiscoveryConfig. What this module reads from it (keys of the config's
+`discovery` section; values of the full benchmark, experiments/bsbm/snakefile/config.yaml):
+- `dconf.configfile`: the FedShop config. Its `generation.schema.{product,vendor,ratingsite}`
+  sections give the WatDiv templates and their word counts; the counts below override theirs.
+- `dconf.brands_conf`: `discovery.brands`
+    products       int    products in all brand catalogs together           200000
+    count          int    brands (producers)                                400
+    zipf           float  brand size ~ rank^-zipf                           0.8
+    min_products   int    products of the smallest brand                    20
+    service_share  float  share of brands, largest first, with a service    0.25
+    seed           any    seed of the product -> brand assignment           42
+- `dconf.members_conf`: `discovery.members`
+    offers         number average offers per shop (normal_dist avg)         2000
+    reviews        number average reviews per review site                   10000
+    seed           any    seed of each member's offer or review count       42
+- `dconf.pool`: `discovery.members.pool`, products shops and review sites deal in     20000
+- `dconf.member_names`: vendor0..vendor<shops-1>, ratingsite0..ratingsite<review_sites-1>,
+  from `discovery.members.shops` and `.review_sites`                                   20, 20
+- `dconf.dataset_dir`: where the members go, <outdir>/members
+- `dconf.path(...)`: a path under <outdir> (`discovery.workdir`, default
+  <generation.workdir>/benchmark/discovery), its parent directory created
 """
 import math
 import random
@@ -28,7 +50,10 @@ def watdiv_dir(dconf):
 
 
 def generate(dconf, force=False):
-    """Run FedShop's product template for the brand catalogs (once; `force` regenerates)."""
+    """Run FedShop's product template for the brand catalogs (once; `force` regenerates).
+
+    Reads dconf.configfile, dconf.brands_conf["products"] and ["count"]; writes <outdir>/catalog/.
+    """
     out = Path(watdiv_dir(dconf))
     if out.exists() and any(out.glob("Product/*.nq")) and not force:
         LOGGER.info(f"Brand catalog already generated in {out}")
@@ -53,7 +78,12 @@ def fedshop_count(rng, avg, mu=3, sigma=1):
 
 
 def generate_members(dconf, force=False):
-    """Run FedShop's vendor and rating-site templates against the brand catalog, one run per member."""
+    """Run FedShop's vendor and rating-site templates against the brand catalog, one run per member.
+
+    Reads dconf.configfile, dconf.members_conf["offers"], ["reviews"] and ["seed"], dconf.pool and
+    dconf.member_names; needs <outdir>/catalog/ (generate) and writes dconf.dataset_dir.
+    An existing member is kept unless `force`.
+    """
     out = Path(dconf.dataset_dir)
     out.mkdir(parents=True, exist_ok=True)
     conf = dconf.members_conf
@@ -95,7 +125,10 @@ def brand_sizes(n_products, count, zipf, min_products):
 
 
 class Catalog:
-    """Products (global number -> triples), their brands, producers, types and features."""
+    """Products (global number -> triples), their brands, producers, types and features.
+
+    Reads every key of dconf.brands_conf and dconf.pool; needs <outdir>/catalog/ (generate).
+    """
 
     def __init__(self, dconf):
         conf = dconf.brands_conf

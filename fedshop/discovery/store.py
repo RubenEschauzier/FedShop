@@ -1,6 +1,6 @@
 """The query services: one Virtuoso container with a graph per owner and a virtual endpoint per composite.
 
-Every owner's data (data/<owner>.nt and its cached specs) is loaded into the graph named by its
+Every owner's data (data/<owner>.nt) is loaded into the graph named by its
 namespace, so the analysis and the reference answers can see who holds what. Owners with a
 service get a virtual SPARQL endpoint, as FedShop builds them: a vhost on its own port whose
 default graph is the owner's graph, so the endpoint answers for that owner only. Owners without a
@@ -42,9 +42,8 @@ def load(dconf, owners):
     data_dir = Path(dconf.path("data", "x")).parent
     statements = []
     for name, info in owners.items():
-        for f in (f"{name}.nt", f"{name}.replicas.nt"):
-            if Path(data_dir, f).exists():
-                statements.append(f"ld_dir('/usr/share/proj', '{f}', '{info['namespace']}');")
+        if Path(data_dir, f"{name}.nt").exists():
+            statements.append(f"ld_dir('/usr/share/proj', '{name}.nt', '{info['namespace']}');")
     statements.append("rdf_loader_run();")
     LOGGER.info(f"Loading {len(statements) - 1} files into {dconf.virtuoso['container']}...")
     isql(dconf, statements)

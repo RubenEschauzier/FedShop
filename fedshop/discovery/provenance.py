@@ -7,10 +7,10 @@ admits whatever that service holds: a SERVICE clause asks one source what it has
 
 Claims. Every owner with a query service (a composite) claims its namespace: the triples whose
 subject is in it. A triple is admitted from the graph that holds it if that graph is its subject's
-owner, or if nobody claims the subject (its owner has no service). Cached specs held by a shop
-about a brand's product are therefore dropped when the brand runs a service, and admitted for
-lookup-only brands. The claim semantics (paper, Def. 10) is the reference answer; the union
-semantics (every triple admitted) is computed alongside to show which answers claims change.
+owner, or if nobody claims the subject (its owner has no service). The claim semantics (paper,
+Def. 10) is the reference answer; the union semantics (every triple admitted) is computed alongside.
+Every triple is held by its subject's owner only, so the two are equal: claims hold in this
+environment, and enforcing them prunes sources without changing the answer.
 
 Reachability. Discovery starts at the owners whose services the query names (or, for a query
 without SERVICE clauses, at the catalog). In each round the values

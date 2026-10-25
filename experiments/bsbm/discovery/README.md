@@ -32,15 +32,14 @@ An entity's IRI is the URL of its document plus `#it`: the offer `vendor13/Offer
   - **Listings and review pages** repeat `<offer> bsbm:product <listing>` of each of their offers and `<review> bsbm:reviewFor <page>` of each of their reviews, so a reached listing leads to its offers and a review page to its reviews.
   - **Category pages.** A brand has a page per product type it makes (`producer22/types/ProductType551`) that repeats `<product> rdf:type <type>` of its products of that type. With the taxonomy's links, a type in a query leads to every product of that type.
   - **Brand records.** A brand's own record (`producer22/Producer22`) repeats `<product> bsbm:producer <record>` of each of its products, as a brand's catalog page lists its range.
-- **Cached specs.** A share of listings (`replicas.share`, 0.25) carries a copy of the brand's spec sheet (label and numeric properties) under the brand's product IRI. Some of these copies are stale (`replicas.stale`, 0.3): their numbers are off by 50–400.
 
 `fs:` is `http://fedshop.example.org/vocab#`; everything else is BSBM's vocabulary.
 
 ## Claims
 
-Every owner with a query service claims its namespace: the triples whose subject is in it. A triple is admitted from the source that holds it if that source is its subject's owner, or if nobody claims the subject. A shop's cached copy of a brand's spec is dropped when the brand runs a service, and admitted alongside the brand's own documents when the brand is lookup-only.
+Every owner with a query service claims its namespace: the triples whose subject is in it. A triple is admitted from the source that holds it if that source is its subject's owner, or if nobody claims the subject.
 
-The reference answer of every instance (`results.csv`) is the claim semantics. `union-results.csv` admits every triple, which is what an engine gets by merging all sources. Patterns inside a `SERVICE` clause are not subject to claims: they get whatever that service holds.
+Every triple is held by its subject's owner only, so the claims hold in this environment: enforcing them lets an engine skip sources without changing the answer. The reference answer of every instance (`results.csv`) is the claim semantics, and it equals `union-results.csv`, which admits every triple, as an engine merging all sources does; `build-workload` warns if an instance's two answers differ. Patterns inside a `SERVICE` clause are not subject to claims: they get whatever that service holds.
 
 ## Serving
 
@@ -50,7 +49,7 @@ The reference answer of every instance (`results.csv`) is the claim semantics. `
 | Query services | Virtuoso, container `fedshop-discovery-virtuoso` (`docker/virtuoso.yml`) | `http://localhost:343xx/<owner>/sparql` |
 | Every owner's graph, for the analysis | the same container | `http://localhost:8891/sparql` |
 
-- **Documents.** rdf-dataset-fragmenter 2.10.0 (`tools/fragmenter`) writes them with its subject strategy: each triple goes to the document of its subject. Triples that go in another document than their subject's (`placements.nq`: cached specs and the repeated triples for traversal) are placed in one more fragmenter run, with a strategy that sends each quad to the document named by its graph (`tools/fragmenter/place.js`).
+- **Documents.** rdf-dataset-fragmenter 2.10.0 (`tools/fragmenter`) writes them with its subject strategy: each triple goes to the document of its subject. Triples that go in another document than their subject's (`placements.nq`: the repeated triples for traversal) are placed in one more fragmenter run, with a strategy that sends each quad to the document named by its graph (`tools/fragmenter/place.js`).
 - **Storage roots.** Each owner's directory is a container. Its `.meta` types it as `pim:Storage` (CSS advertises that with `Link: <…pim/space#Storage>; rel="type"`) and names its service with `void:sparqlEndpoint`. CSS lists the documents with `ldp:contains`.
 - **The server root** (`/`) is not readable, so it can't be used as an index of all storages.
 - **Query services.** Each service is a Virtuoso virtual endpoint whose default graph is its owner's graph, built the way FedShop builds its member endpoints. Its data equals the union of its owner's documents.
@@ -93,7 +92,7 @@ Templates in `queries/`, with `{{Name}}` placeholders. q01–q12 follow FedShop'
 | q15 | product | my shop's offer for a product, its vendor's country | reviews of the product by reviewers from that country |
 | q16 | analytical | my shop's products and prices | the well-rated reviews of those of a type |
 
-Each template's header gives its kind, the range of answer sizes (`# rows:`) and how many owners outside its `SERVICE` clauses an answer must involve (`# discovered:`). Values are chosen per template from the data, seeded, aiming at that range: thresholds come from the values of the products they filter, rating bounds from the rating distribution, and the multi-member templates use products with enough reviews or offers. For q02 and q05, products with stale cached specs are tried first. Every candidate is run once with each pattern in its own `GRAPH ?g`, under claims and under union semantics. A candidate is kept when:
+Each template's header gives its kind, the range of answer sizes (`# rows:`) and how many owners outside its `SERVICE` clauses an answer must involve (`# discovered:`). Values are chosen per template from the data, seeded, aiming at that range: thresholds come from the values of the products they filter, rating bounds from the rating distribution, and the multi-member templates use products with enough reviews or offers. Every candidate is run once with each pattern in its own `GRAPH ?g`, under claims and under union semantics. A candidate is kept when:
 - **Its answer size is within range** under claims.
 - **It needs discovery** (except q11, the control): part of the answer needs an owner the query doesn't name, is reachable, and involves at least `discovered` such owners.
 
@@ -113,34 +112,99 @@ The full config gives 80 instances (5 per template): 40 hybrid-join, 35 discover
 | q02, q09, q12 (lookups) | 1–72 | 1–5 | – |
 | q11 (control) | 9 | 0 | – |
 
-- **Claims:** 36 instances lose derivations under claims, and in 19 of them claims change the answer.
-- **Traversal** (`fedshop-discovery traverse`) simulates a link-traversal engine on every instance (seeAlso and cMatch over the patterns outside `SERVICE`, seeded with the query's IRIs and with the bindings of a `SERVICE` block the query starts from) and records in `traversal.json` how many documents it reaches and how much of the answer that gives. 79 of 80 instances are complete by traversal alone (q13#2 reaches 98%: one offer is at a shop no link leads to):
-
-  | Kind | Templates | Documents | Complete |
-  |---|---|---|---|
-  | lookup, control | q02, q09, q11, q12 | 0–24 | 20 of 20 |
-  | product | q07, q08, q10, q15 | 17–326 | 20 of 20 |
-  | analytical | q01, q03, q04, q05, q06, q13, q14, q16 | 638–16,106 | 39 of 40 |
-
-  So every answer can be found from documents; what differs is the cost (from 2 documents for a lookup to 16,000 for an analytical query, against one request per service) and correctness: traversal also returns rows claims drop, from stale cached specs, in q01–q05 (q01: 26, q02: 27, q03: 46, q04: 51, q05: 948 rows over five instances each).
-
 ## Pipeline
 
+Run every command from the FedShop root. Each step is one self-contained command that names its config; it reads the outputs of the steps before it and the parameters listed below. `uv run fedshop-discovery all <config>` runs steps 1–7 in one go.
+
+**Once:** build FedShop's WatDiv generator and install the two Node tools.
+
 ```bash
-CONFIG=experiments/bsbm/snakefile/config.yaml      # or config_small.yaml
-# Once: FedShop's WatDiv generator (generators/watdiv, as in FedShop's quickstart) and the two Node tools
-(cd experiments/bsbm/discovery/tools/css && npm ci) && (cd experiments/bsbm/discovery/tools/fragmenter && npm ci)
-# Brand catalogs, shops and review sites, owners, query services, documents, workload
-uv run fedshop-discovery all $CONFIG
-# Documents (keeps running; starts the Virtuoso container if needed)
-uv run fedshop-discovery serve $CONFIG
+scripts/build-watdiv.sh
+(cd experiments/bsbm/discovery/tools/css && npm ci)
+(cd experiments/bsbm/discovery/tools/fragmenter && npm ci)
 ```
 
-`all` runs `catalog` (brand catalogs, then shops and review sites), `own`, `load`, `fragment`, `build-workload` and `traverse`, which can also be run one by one. `fedshop-discovery check $CONFIG query.sparql` analyses any query. FedShop's own data and Virtuoso containers are not used.
+**Generation**, with the full config (for development, use `experiments/bsbm/snakefile/config_small.yaml` instead):
+
+```bash
+# 1. Brand catalogs: FedShop's product template, once (--force regenerates) -> catalog/
+uv run fedshop-discovery catalog experiments/bsbm/snakefile/config.yaml
+
+# 2. Shops and review sites: FedShop's vendor and rating-site templates, one run per member;
+#    existing members are kept (--force regenerates) -> members/
+uv run fedshop-discovery members experiments/bsbm/snakefile/config.yaml
+
+# 3. Owners: every triple to its owner, links, placements, categories
+#    -> data/, owners.json, links.tsv, placements.nq, categories.json
+uv run fedshop-discovery own experiments/bsbm/snakefile/config.yaml
+
+# 4. Query services: (re)create the Virtuoso container from data/ (needs Docker)
+uv run fedshop-discovery load experiments/bsbm/snakefile/config.yaml
+
+# 5. Documents: rdf-dataset-fragmenter, plus the storage roots' metadata -> web/
+uv run fedshop-discovery fragment experiments/bsbm/snakefile/config.yaml
+
+# 6. Workload: instantiate the templates, analyse and select the instances (starts Virtuoso)
+#    -> workload/, workload-summary.csv, sources/
+uv run fedshop-discovery build-workload experiments/bsbm/snakefile/config.yaml
+
+# 7. Plain forms of every instance (starts Virtuoso) -> workload/*/instance_*/plain*.{sparql,csv}
+uv run fedshop-discovery plain experiments/bsbm/snakefile/config.yaml
+```
+
+**Serving** the documents (keeps running; starts the Virtuoso container if needed):
+
+```bash
+uv run fedshop-discovery serve experiments/bsbm/snakefile/config.yaml --log-level warn
+```
+
+`fedshop-discovery check <config> query.sparql` analyses any query. FedShop's own data and Virtuoso containers are not used.
+
+### Parameters
+
+Every parameter comes from the config's `discovery` section. These are the values that give the benchmark described here; a key left out of the config falls back to `DEFAULTS` in `fedshop/discovery/common.py`, which are the full values. Steps 6 and 7 also need the Virtuoso ports of step 4.
+
+| Key | Full | Small | Read by | Meaning |
+|---|---|---|---|---|
+| `workdir` | `benchmark/discovery` | `benchmark/discovery-small` | all | outputs, under `experiments/bsbm/` |
+| `base_url` | `http://localhost:3000/` | same | own, fragment, build-workload, plain, serve | namespace root: `<base_url><owner>/` |
+| `brands.products` | 200,000 | 20,000 | catalog, own | products in all brand catalogs together |
+| `brands.count` | 400 | 40 | catalog, own | brands (FedShop's `producer_n`) |
+| `brands.zipf` | 0.8 | same | own | brand size ∝ rank^-zipf |
+| `brands.min_products` | 20 | same | own | products of the smallest brand |
+| `brands.service_share` | 0.25 | same | own | share of brands, largest first, with a service |
+| `brands.seed` | 42 | same | own | product → brand assignment |
+| `members.shops` | 20 | 20 | members, own | shops (`vendor0`…) |
+| `members.review_sites` | 20 | 20 | members, own | review sites (`ratingsite0`…) |
+| `members.pool` | 20,000 | 200 | members, own | the catalog's first products, which members deal in |
+| `members.offers` | 2,000 | 20 | members | average offers per shop (`normal_dist(3, 1, avg)`) |
+| `members.reviews` | 10,000 | 100 | members | average reviews per review site; reviewers per site = reviews / 20 |
+| `members.seed` | 42 | same | members | each member's offer or review count |
+| `classical.ratio` | 0.5 | same | own | share of shops and of review sites in the catalog |
+| `classical.members` | – (drawn) | same | own | an explicit list of catalog members instead of drawing them |
+| `classical.seed` | 42 | same | own | which members are in the catalog |
+| `links.reviews` | 2 | same | own | shop listing → review pages |
+| `links.where_to_buy` | 3 | same | own | review page → shop listings |
+| `links.also_reviewed` | 0 | same | own | review page → other review pages |
+| `links.brand_where_to_buy` | 2 | same | own | brand product → shop listings |
+| `links.brand_reviews` | `all` | same | own | brand product → review pages |
+| `links.seed` | 42 | same | own | peers per listing |
+| `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
+| `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load | |
+| `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, plain, check | |
+| `virtuoso.first_service_port` | 34300 | same | own | port of the first query service; the rest follow |
+| `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | |
+| `workload.templates_dir` | `discovery/queries` | same | build-workload | |
+| `workload.per_template` | 5 | same | build-workload | instances kept per template |
+| `workload.max_candidates` | 40 | same | build-workload | candidates tried per template |
+| `workload.max_rows` | 100,000 | same | build-workload | candidates with more derivations than this are skipped |
+| `workload.seed` | 42 | same | build-workload | value selection per template |
+
+The WatDiv runs (steps 1–2) also read FedShop's `generation.schema.{product,vendor,ratingsite}` sections of the same config, for the templates and their word counts; the counts above override theirs, and FedShop's numbers of product types and features follow from `brands.products` by its formulas.
 
 | | Full config | Small config |
 |---|---|---|
-| Time | ≈30 min (catalog and members 5, own 2, load 2, fragment 15, workload 3, traverse 2) | ≈1 min |
+| Time | ≈30 min (catalog and members 5, own 2, load 2, fragment 15, workload 3) | ≈1 min |
 | Disk | ≈10.6 GB (catalog 2.5, members 2.1, data 1.5, placements 0.45, documents 4.0, plus Virtuoso) | ≈0.7 GB |
 | Triples / documents / services | 8,758,874 / 759,900 (280,923 of them category pages) / 141 | not rebuilt yet |
 
@@ -178,18 +242,16 @@ The script starts Virtuoso and CSS if they aren't running, then runs `fedshop-di
 |---|---|
 | `catalog/` | the WatDiv run for the brand catalogs |
 | `members/` | the WatDiv runs for the shops and review sites |
-| `data/<owner>.nt`, `data/<owner>.replicas.nt` | every owner's triples and cached specs, as loaded into Virtuoso |
+| `data/<owner>.nt` | every owner's triples, as loaded into Virtuoso |
 | `owners.json` | every owner: kind, namespace, in the catalog or not, service and endpoint, triples |
 | `links.tsv` | every link: product, owner, from, peer, to |
-| `replicas.json` | every cached spec: listing, product, stale or not |
 | `placements.nq` | triples placed in another document than their subject's, with that document as graph |
 | `categories.json` | every product type and the brands with a category page for it |
 | `web/` | the documents CSS serves |
 | `sources/` | the catalog (`catalog-endpoints.tsv`, `catalog-fedx.ttl`); `discovered-storages.tsv` is for analysis only |
-| `workload/<query>/instance_<i>/` | `injected.sparql`, `results.csv` (claims), `union-results.csv`, `reachable.csv`, `analysis.json`, `traversal.json`; `plain.sparql`, `plain-results.csv`, `plain-union-results.csv` |
+| `workload/<query>/instance_<i>/` | `injected.sparql`, `results.csv` (claims), `union-results.csv`, `reachable.csv`, `analysis.json`; `plain.sparql`, `plain-results.csv`, `plain-union-results.csv` |
 | `runs/<name>/` | engine runs: `summary.md`, `results.jsonl`, `outputs/`, `logs/` |
 | `workload-summary.csv` | every candidate, kept or not, and why |
-| `traversal-summary.csv` | per instance: documents reached by traversal, answer complete or not |
 
 ## Deviations from FedShop
 
@@ -199,7 +261,7 @@ The script starts Virtuoso and CSS if they aren't running, then runs `fedshop-di
 - **Own generation.** The benchmark runs FedShop's templates itself, with seeded offer and review counts. Shops and review sites have FedShop's full per-member rates, but there are 20 of each (FedShop's batch 1) instead of FedShop's 100.
 - **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands own 200,000 products, most of them sold nowhere.
 - **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment.
-- **Links, cached specs and category pages are new.** FedShop has no links between members, no data held by a non-owner and no documents.
+- **Links and category pages are new.** FedShop has no links between members and no documents.
 - **IRIs.** All IRIs move under `http://localhost:3000/<owner>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy.
 - **Literals.** Dates gain their time of day (FedShop's `"2008-04-22"^^xsd:dateTime` is not a valid dateTime) and prices become `xsd:decimal` instead of `xsd:double`. That way documents and Virtuoso write every triple the same way.
 
@@ -221,8 +283,10 @@ The script starts Virtuoso and CSS if they aren't running, then runs `fedshop-di
 **Workload**
 - **Own value selection.** Values come from this benchmark's own selection on the new data, not from FedShop's query generator.
 - **New selection rules.** Instances are kept by answer size, need for discovery and the number of owners involved, the same rules for every template. Delegation gains are reported only.
-- **New reference.** The reference answer is the claim semantics, not plain evaluation over the union of members.
+- **New reference.** The reference answer is the claim semantics. Every triple is held by its owner only, so it equals plain evaluation over the union of members.
 
 ## TODO
+
+- **Rebuild the numbers.** Cached specs (copies of a brand's spec, some stale, held by shops and review sites) have been removed. The workload results and the data sizes in this README are from the build that still had them.
 
 - **Oracle federation baseline.** Give a federation engine (FedX, and the existing federation approaches, most of which are in Comunica) every discovered owner's endpoint up front: the federation cost if discovery were free. The owners each answer needs are in `analysis.json` (`storages_in_answer`). Owners without a service (small brands, reviewers) have no endpoint, so queries that need them can't be answered this way; give their documents as sources, or report those queries separately.

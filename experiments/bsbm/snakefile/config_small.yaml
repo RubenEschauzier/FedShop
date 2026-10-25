@@ -156,10 +156,6 @@ discovery:
     brand_where_to_buy: 2        # brand product -> shop listings
     brand_reviews: all           # brand product -> review site pages: every page that reviews it ("reviewed at")
     seed: 42
-  replicas:                      # shops and review sites caching a brand's spec sheet under the brand's IRI
-    share: 0.25                  # listings that carry a cached spec
-    stale: 0.3                   # cached specs whose numeric values are out of date
-    seed: 42
   virtuoso:                      # one container for every owner's query service, next to FedShop's own containers
     compose_file: "${generation.workdir}/discovery/docker/virtuoso.yml"
     container: fedshop-discovery-virtuoso
@@ -173,5 +169,4 @@ discovery:
     per_template: 5
     max_candidates: 40
     max_rows: 100000
-    gain_min: 10                 # templates built around a brand star keep instances whose star saves this factor at its service
     seed: 42

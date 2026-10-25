@@ -2,11 +2,11 @@ import csv
 import io
 import json
 import os
-import re
 from pathlib import Path
 
 import requests
 from omegaconf import OmegaConf
+from pyoxigraph import RdfFormat, parse
 
 from ..utils import fedshop_logger, load_config
 
@@ -21,21 +21,18 @@ OWL_SAMEAS = "http://www.w3.org/2002/07/owl#sameAs"
 PIM_STORAGE = "http://www.w3.org/ns/pim/space#Storage"
 VOID_ENDPOINT = "http://rdfs.org/ns/void#sparqlEndpoint"
 COUNTRIES = "http://downlode.org/rdf/iso-3166/countries#"
-NQUAD = re.compile(r"^(<[^>]*>|_:\S+)\s+(<[^>]*>)\s+(.*?)\s+(<[^>]*>\s+)?\.\s*$")
 
 DEFAULTS = {
     "base_url": "http://localhost:3000/",
     "classical": {"ratio": 0.5, "seed": 42, "members": None},
-    "members": {"shops": 20, "review_sites": 20, "pool": 200, "offers": 20, "reviews": 100, "seed": 42},
-    "brands": {"products": 20000, "count": 40, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
-    "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": 2,
+    "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000, "seed": 42},
+    "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
+    "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
               "seed": 42},
-    "replicas": {"share": 0.25, "stale": 0.3, "seed": 42},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
                  "http_port": 8891, "first_service_port": 34300},
     "css": {"port": 3000, "config": None},
-    "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000,
-                 "gain_min": 10, "seed": 42},
+    "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
 }
 
 
@@ -64,18 +61,17 @@ class DiscoveryConfig:
         self.classical_conf = merged("classical")
         self.brands_conf = merged("brands")
         self.links_conf = merged("links")
-        self.replicas_conf = merged("replicas")
         self.virtuoso = merged("virtuoso")
         self.css = merged("css")
         self.workload_conf = merged("workload")
         self.outdir = section.get("workdir") or f"{self.workdir}/benchmark/discovery"
-        self.dataset_dir = f"{self.outdir}/members"                     # generated shops and review sites
+        self.dataset_dir = f"{self.outdir}/members"       
         self.discovery_dir = f"{self.workdir}/discovery"
         self.virtuoso["compose_file"] = self.virtuoso["compose_file"] or f"{self.discovery_dir}/docker/virtuoso.yml"
         self.css["config"] = self.css["config"] or f"{self.discovery_dir}/css-config.json"
         self.workload_conf["templates_dir"] = self.workload_conf["templates_dir"] or f"{self.discovery_dir}/queries"
 
-        self.pool = int(self.members_conf["pool"])                    # products shops and review sites deal in
+        self.pool = int(self.members_conf["pool"])                    
         self.member_names = ([f"vendor{i}" for i in range(int(self.members_conf["shops"]))]
                              + [f"ratingsite{i}" for i in range(int(self.members_conf["review_sites"]))])
 
@@ -107,16 +103,16 @@ def load_owners(dconf):
 
 
 def read_nquads(path):
-    """Yield (s, p, o) N-Triples terms of a FedShop N-Quads file, without duplicates."""
+    """Yield (s, p, o) N-Triples terms of a FedShop N-Quads file, without duplicates or graphs.
+
+    Terms keep their lexical form (FedShop's "2008-04-22"^^xsd:dateTime stays as written).
+    """
     seen = set()
-    with open(path) as fs:
-        for line in fs:
-            m = NQUAD.match(line)
-            if m:
-                triple = (m.group(1), m.group(2), m.group(3))
-                if triple not in seen:
-                    seen.add(triple)
-                    yield triple
+    for quad in parse(path=str(path), format=RdfFormat.N_QUADS):
+        triple = (str(quad.subject), str(quad.predicate), str(quad.object))
+        if triple not in seen:
+            seen.add(triple)
+            yield triple
 
 
 def sparql_csv(endpoint, query, timeout=600):
