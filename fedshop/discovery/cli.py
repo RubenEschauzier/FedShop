@@ -41,7 +41,7 @@ def own(configfile):
 @cli.command()
 @CONFIG
 def load(configfile):
-    """(Re)create the discovery Virtuoso container: one graph per owner, one service per composite."""
+    """(Re)create the Virtuoso containers: one graph per publisher, one service per publisher with a service."""
     dconf = DiscoveryConfig(configfile)
     click.echo(json.dumps(store.load(dconf, load_owners(dconf)), indent=2))
 

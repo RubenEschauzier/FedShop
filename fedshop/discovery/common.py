@@ -30,9 +30,10 @@ DEFAULTS = {
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
               "seed": 42},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
-                 "http_port": 8891, "first_service_port": 34300},
+                 "http_port": 8891, "catalog_container": "fedshop-discovery-virtuoso-catalog",
+                 "catalog_isql_port": 1113, "catalog_http_port": 8892, "first_service_port": 34300},
     "css": {"port": 3000, "config": None},
-    "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48},
+    "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48, "sample_ms": 50},
     "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
 }
 

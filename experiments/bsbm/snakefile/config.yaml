@@ -163,7 +163,10 @@ discovery:
     compose_file: "${generation.workdir}/discovery/docker/virtuoso.yml"
     container: fedshop-discovery-virtuoso
     isql_port: 1112
-    http_port: 8891
+    http_port: 8891              # the analysis endpoint: every publisher's graph
+    catalog_container: fedshop-discovery-virtuoso-catalog   # the catalog's graphs and services, measured apart
+    catalog_isql_port: 1113
+    catalog_http_port: 8892
     first_service_port: 34300
   css:
     port: 3000
@@ -172,6 +175,7 @@ discovery:
     port_offset: 10000           # the Solid server and Virtuoso's services listen on their public port + this
     control_port: 3999           # GET /stats, POST /reset
     max_inflight: 48             # requests to Virtuoso at once; the rest wait in the proxy
+    sample_ms: 50                # CPU and memory sampling interval for min/max (totals are exact)
   workload:
     per_template: 5
     max_candidates: 40

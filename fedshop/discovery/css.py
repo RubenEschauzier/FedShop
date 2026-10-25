@@ -4,7 +4,8 @@ behind the counting proxy (tools/proxy).
 The proxy holds the public ports: css.port for documents and every query service's port. The Solid
 server and Virtuoso's services listen on their public port + proxy.port_offset, so engines reach
 them only through the proxy, and every request is counted by source (known or discovered publisher)
-and by kind (document, storage root, SPARQL).
+and by kind (document, storage root, SPARQL). The proxy also measures CPU and memory of the Solid
+server, of each Virtuoso container (catalog endpoints, discovered endpoints) and of itself.
 """
 import json
 import subprocess
@@ -18,8 +19,16 @@ def command(dconf, log_level="warn"):
             "-p", str(dconf.internal_port(dconf.css["port"])), "-b", dconf.base, "-l", log_level]
 
 
-def write_proxy_map(dconf, owners):
-    """The proxy's ports and publishers (proxy.json)."""
+def cgroup(container):
+    """The cgroup directory of a running container, where its CPU and memory counters are."""
+    pid = subprocess.run(["docker", "inspect", "-f", "{{.State.Pid}}", container],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    path = next(l[3:] for l in Path(f"/proc/{pid}/cgroup").read_text().splitlines() if l.startswith("0::"))
+    return f"/sys/fs/cgroup{path}"
+
+
+def write_proxy_map(dconf, owners, css_pid):
+    """The proxy's ports, publishers and the components it measures (proxy.json)."""
     proxy_map = {
         "documents": {"port": int(dconf.css["port"]), "target": dconf.internal_port(dconf.css["port"])},
         "services": [{"port": i["port"], "target": dconf.internal_port(i["port"]), "publisher": n}
@@ -27,6 +36,11 @@ def write_proxy_map(dconf, owners):
         "publishers": {n: {"kind": i["kind"], "catalog": i["classical"]} for n, i in owners.items()},
         "control_port": int(dconf.proxy["control_port"]),
         "max_inflight": int(dconf.proxy["max_inflight"]),
+        "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": [
+            {"name": "css", "pid": css_pid},
+            {"name": "catalog_endpoints", "cgroup": cgroup(dconf.virtuoso["catalog_container"])},
+            {"name": "discovered_endpoints", "cgroup": cgroup(dconf.virtuoso["container"])},
+        ]},
     }
     path = dconf.path("proxy.json")
     Path(path).write_text(json.dumps(proxy_map, indent=1))
@@ -34,12 +48,17 @@ def write_proxy_map(dconf, owners):
 
 
 def serve(dconf, owners, log_level="warn", request_log=None):
-    """Run the proxy and CSS in the foreground until interrupted."""
-    proxy = Path(dconf.discovery_dir, "tools", "proxy", "proxy.js").resolve()
-    args = ["node", str(proxy), write_proxy_map(dconf, owners)] + ([str(Path(request_log).resolve())] if request_log else [])
-    proc = subprocess.Popen(args)
+    """Run CSS and the proxy in the foreground until interrupted."""
+    css = subprocess.Popen(command(dconf, log_level))
+    proxy = None
     try:
-        subprocess.run(command(dconf, log_level), check=True)
+        script = Path(dconf.discovery_dir, "tools", "proxy", "proxy.js").resolve()
+        args = ["node", str(script), write_proxy_map(dconf, owners, css.pid)]
+        proxy = subprocess.Popen(args + ([str(Path(request_log).resolve())] if request_log else []))
+        if css.wait() != 0:
+            raise RuntimeError(f"The Solid server stopped with exit code {css.returncode}")
     finally:
-        proc.terminate()
-        proc.wait()
+        for proc in (proxy, css):
+            if proc and proc.poll() is None:
+                proc.terminate()
+                proc.wait()

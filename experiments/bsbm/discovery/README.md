@@ -44,15 +44,16 @@ The reference answer of every instance (`results.csv`) is its answer over all pu
 | What | Software | Where |
 |---|---|---|
 | Documents and storage roots | Community Solid Server 7.2.0 (`tools/css`, `css-config.json`), behind the proxy | `http://localhost:3000/` |
-| Query services | Virtuoso, container `fedshop-discovery-virtuoso` (`docker/virtuoso.yml`), behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
-| Request counts | the counting proxy (`tools/proxy/proxy.js`) | control API on `http://localhost:3999/` |
-| Every publisher's graph, for the analysis only | the same Virtuoso container, not proxied | `http://localhost:8891/sparql` |
+| Query services of the catalog (known up front) | Virtuoso, container `fedshop-discovery-virtuoso-catalog` (`docker/virtuoso.yml`), behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
+| Query services of the other publishers (discovered) | Virtuoso, container `fedshop-discovery-virtuoso`, behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
+| Request counts, CPU and memory per component | the counting proxy (`tools/proxy/proxy.js`) | control API on `http://localhost:3999/` |
+| Every publisher's graph, for the analysis only | container `fedshop-discovery-virtuoso`, not proxied | `http://localhost:8891/sparql` |
 
 - **Documents.** rdf-dataset-fragmenter 2.10.0 (`tools/fragmenter`) writes them with its subject strategy: each triple goes to the document of its subject. Triples that go in another document than their subject's (`placements.nq`: the repeated triples for traversal) are placed in one more fragmenter run, with a strategy that sends each quad to the document named by its graph (`tools/fragmenter/place.js`).
 - **Storage roots.** Each publisher's directory is a container. Its `.meta` types it as `pim:Storage` (CSS advertises that with `Link: <…pim/space#Storage>; rel="type"`) and names its service with `void:sparqlEndpoint`. CSS lists the documents with `ldp:contains`.
 - **The server root** (`/`) is not readable, so it can't be used as an index of all storages.
 - **Query services.** Each service is a Virtuoso virtual endpoint whose default graph is its publisher's graph, built the way FedShop builds its member endpoints. Its data equals the union of its publisher's documents.
-- **Container.** The discovery container runs next to FedShop's own containers, on its own ports (isql 1112, HTTP 8891, services on 44300 onwards behind the proxy), and never touches them. Its connection limits are raised (64 HTTP threads, 64 idle keep-alive connections): at Virtuoso's defaults (20 threads, 10 idle keep-alive connections) reused connections are dropped without notice, and engines fail with errors like "fetch failed".
+- **Containers.** Two Virtuoso containers, so CPU and memory can be told apart: `fedshop-discovery-virtuoso-catalog` holds the catalog's graphs and serves the catalog's services; `fedshop-discovery-virtuoso` holds every publisher's graph (the analysis endpoint) and serves the other services. They run next to FedShop's own containers, on their own ports (isql 1112 and 1113, HTTP 8891 and 8892, services on 44300 onwards behind the proxy), and never touch them. Their connection limits are raised (64 HTTP threads, 64 idle keep-alive connections): at Virtuoso's defaults (20 threads, 10 idle keep-alive connections) reused connections are dropped without notice, and engines fail with errors like "fetch failed".
 
 ### Counting requests
 
@@ -73,6 +74,19 @@ curl localhost:3999/stats                                                       
 ```
 
 `serve --request-log requests.jsonl` also writes every request (label, URL, publisher, kind, source, status, bytes, time) as one JSON line.
+
+### CPU and memory per component
+
+`GET /stats` also has `resources`: CPU and memory since the last reset for each component, so they can be attributed to the instance that ran between `POST /reset` and `GET /stats`.
+
+| Component | What is measured |
+|---|---|
+| `css` | the Solid server's process: CPU of all its threads, resident memory |
+| `catalog_endpoints` | the catalog container's cgroup: CPU, memory (`memory.current` − `inactive_file`, as `docker stats` reports it) |
+| `discovered_endpoints` | the main container's cgroup, the same way |
+| `proxy` | the proxy itself, including its own sampling (about 2% of a core at 50 ms) |
+
+For each: `cpu_seconds` and `cpu_percent.avg` are exact, from the CPU counters read at the reset and at `/stats`, so even an instance of a few milliseconds is measured (tested: 20 ms of work measured as 0.0206 s). `cpu_percent.min`/`max` and `memory_bytes.min`/`max`/`avg` come from samples every `proxy.sample_ms` (50 ms), plus one at the reset and one at `/stats`; `samples` says how many. A peak shorter than the interval can be missed by min/max, never by the totals. 100% CPU is one core. `GET /stats?samples=1` adds every sample (`series`).
 
 ## How an engine finds things
 
@@ -209,13 +223,16 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `links.brand_reviews` | `all` | same | own | brand product → review pages |
 | `links.seed` | 42 | same | own | peers per listing |
 | `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
-| `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load | |
+| `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load, serve | every graph (analysis) and the discovered services |
 | `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, plain, check | |
+| `virtuoso.catalog_container` | `fedshop-discovery-virtuoso-catalog` | same | load, serve | the catalog's graphs and services |
+| `virtuoso.catalog_isql_port` / `catalog_http_port` | 1113 / 8892 | same | load, check | |
 | `virtuoso.first_service_port` | 34300 | same | own, load, serve | public port of the first query service; the rest follow |
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
 | `proxy.port_offset` | 10000 | same | load, serve | the Solid server and the services listen on their public port + this |
 | `proxy.control_port` | 3999 | same | serve | `GET /stats`, `POST /reset` |
 | `proxy.max_inflight` | 48 | same | serve | requests to Virtuoso at once; the rest wait in the proxy |
+| `proxy.sample_ms` | 50 | same | serve | CPU and memory sampling interval, for min and max |
 | `workload.templates_dir` | `discovery/queries` | same | build-workload | |
 | `workload.per_template` | 5 | same | build-workload | instances kept per template |
 | `workload.max_candidates` | 40 | same | build-workload | candidates tried per template |
@@ -230,7 +247,7 @@ The WatDiv runs (steps 1–2) also read FedShop's `generation.schema.{product,ve
 | Disk | ≈10.6 GB (catalog 2.5, members 2.1, data 1.5, placements 0.45, documents 4.0, plus Virtuoso) | ≈0.7 GB |
 | Triples / documents / services | 8,758,874 / 759,900 (280,923 of them category pages) / 141 | not rebuilt yet |
 
-The Virtuoso container holds one config at a time: `load` switches, and `build-workload` and `check` refuse to run when the container holds another config's data. Outputs go to `benchmark/discovery` (full) and `benchmark/discovery-small`.
+The Virtuoso containers hold one config at a time: `load` switches, and `build-workload` and `check` refuse to run when they hold another config's data. Outputs go to `benchmark/discovery` (full) and `benchmark/discovery-small`.
 
 ## Running an engine
 
