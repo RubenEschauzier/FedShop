@@ -8,11 +8,20 @@ from .common import DiscoveryConfig, load_owners
 
 
 @click.group
-def cli():
-    """Discovery-based FedShop: owners, their documents and query services, and the workload."""
+@click.option("--overrides", multiple=True, type=click.Path(exists=True, dir_okay=False),
+              help="YAML file with keys of the config's discovery section, merged over it (repeatable, in order)")
+@click.pass_context
+def cli(ctx, overrides):
+    """Discovery-based FedShop: publishers, their documents and query services, and the workload."""
+    ctx.obj = overrides
 
 
 CONFIG = click.argument("configfile", type=click.Path(exists=True, dir_okay=False))
+
+
+def config(configfile):
+    """The discovery config, with the --overrides given to the command group."""
+    return DiscoveryConfig(configfile, click.get_current_context().find_root().obj or ())
 
 
 @cli.command("catalog")
@@ -20,7 +29,7 @@ CONFIG = click.argument("configfile", type=click.Path(exists=True, dir_okay=Fals
 @click.option("--force", is_flag=True, default=False, help="Regenerate even if the brand catalog exists")
 def catalog_cmd(configfile, force):
     """Generate the brand catalogs with FedShop's product template (catalog/)."""
-    catalog.generate(DiscoveryConfig(configfile), force=force)
+    catalog.generate(config(configfile), force=force)
 
 
 @cli.command()
@@ -28,29 +37,38 @@ def catalog_cmd(configfile, force):
 @click.option("--force", is_flag=True, default=False, help="Regenerate members that already exist")
 def members(configfile, force):
     """Generate the shops and review sites with FedShop's vendor and rating-site templates (members/)."""
-    catalog.generate_members(DiscoveryConfig(configfile), force=force)
+    catalog.generate_members(config(configfile), force=force)
 
 
 @cli.command()
 @CONFIG
 def own(configfile):
     """Restructure FedShop's data into publishers: data/<publisher>.nt, publishers.json, links.tsv, placements.nq."""
-    click.echo(json.dumps(ownership.run(DiscoveryConfig(configfile)), indent=2))
+    click.echo(json.dumps(ownership.run(config(configfile)), indent=2))
 
 
 @cli.command()
 @CONFIG
 def load(configfile):
     """(Re)create the Virtuoso containers: one graph per publisher, one service per publisher with a service."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     click.echo(json.dumps(store.load(dconf, load_owners(dconf)), indent=2))
+
+
+@cli.command("load-scripts")
+@CONFIG
+def load_scripts(configfile):
+    """Write the loading of both Virtuoso containers as initdb.d scripts (virtuoso/<main|catalog>/load.sql),
+    for running the containers elsewhere (jbr) instead of `load`."""
+    dconf = config(configfile)
+    click.echo("\n".join(store.write_load_scripts(dconf, load_owners(dconf))))
 
 
 @cli.command("fragment")
 @CONFIG
 def fragment_cmd(configfile):
     """Write one document per subject with rdf-dataset-fragmenter (web/), plus storage metadata."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     click.echo(json.dumps(fragment.run(dconf, load_owners(dconf)), indent=2))
 
 
@@ -61,16 +79,27 @@ def fragment_cmd(configfile):
               help="Append every request the proxy forwards to this JSON-lines file")
 def serve(configfile, log_level, request_log):
     """Serve the documents and query services behind the counting proxy (keeps running)."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     store.start(dconf)
     css.serve(dconf, load_owners(dconf), log_level, request_log)
+
+
+@cli.command("serving-plan")
+@CONFIG
+@click.option("--documents-host", default="localhost", help="Host the Solid server runs on, as the proxy reaches it")
+def serving_plan(configfile, documents_host):
+    """Write serving.json: the Solid server's command and the proxy's map, for serving the benchmark elsewhere (jbr)."""
+    dconf = config(configfile)
+    path = dconf.path("serving.json")
+    Path(path).write_text(json.dumps(css.serving_plan(dconf, load_owners(dconf), documents_host), indent=1))
+    click.echo(path)
 
 
 @cli.command("build-workload")
 @CONFIG
 def build_workload(configfile):
     """Instantiate the templates, analyse the candidates and write the selected workload."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     store.start(dconf)
     store.check(dconf, load_owners(dconf))      # the container must hold this config's data
     records = workload.build(dconf)
@@ -82,7 +111,7 @@ def build_workload(configfile):
 @CONFIG
 def plain(configfile):
     """Write the plain form (no SERVICE clauses) of every instance, with its own answers."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     store.start(dconf)
     store.check(dconf, load_owners(dconf))
     click.echo(f"{len(workload.plain_forms(dconf))} plain forms written")
@@ -93,7 +122,7 @@ def plain(configfile):
 @click.argument("queryfile", type=click.Path(exists=True, dir_okay=False))
 def check(configfile, queryfile):
     """Analyse one query (sources, reachability, delegation gain) and print the result."""
-    dconf = DiscoveryConfig(configfile)
+    dconf = config(configfile)
     store.start(dconf)
     store.check(dconf, load_owners(dconf))
     click.echo(json.dumps(workload.check(dconf, Path(queryfile).read_text()), indent=2))

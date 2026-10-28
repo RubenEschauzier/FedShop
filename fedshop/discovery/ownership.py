@@ -324,7 +324,7 @@ class Ownership:
             info["triples"] = len(self.data[name])
             if info["service"]:
                 info["port"] = port
-                info["endpoint"] = f"http://localhost:{port}/{name}/sparql"
+                info["endpoint"] = f"http://{dconf.public_host}:{port}/{name}/sparql"
                 port += 1
         return owners
 

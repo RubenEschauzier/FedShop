@@ -4,8 +4,9 @@
 // Usage: node proxy.js <map.json> [request-log.jsonl]
 //
 // map.json (written by `fedshop-discovery serve`):
-//   documents: {port, target}             public port of the Solid server and the port it listens on
-//   services: [{port, target, publisher}]  one per query service
+//   documents: {port, target, host?}             public port of the Solid server, and the port (and
+//                                                host, default localhost) it listens on
+//   services: [{port, target, host?, publisher}]  one per query service
 //   publishers: {name: {kind, catalog}}    every publisher, and whether it is in the catalog
 //   control_port, max_inflight            control API; most requests in flight to Virtuoso at once
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
@@ -28,6 +29,7 @@
 //
 // Control API on control_port:
 //   GET  /stats            the counts and resources since the last reset (?samples=1 adds every sample)
+//   GET  /health           200 when the Solid server and one service on every Virtuoso host answer, else 503
 //   POST /reset            zero both; optional JSON body {"label": "q07-2", "known": ["vendor13", "taxonomy"]}
 //                          sets the label written to the request log and the publishers counted as
 //                          known (default: the catalog)
@@ -191,7 +193,7 @@ function release() {
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
 const documentAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 
-function forward(req, res, target, entry, isService) {
+function forward(req, res, { target, host = "localhost" }, entry, isService) {
   const began = Date.now();
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k)) headers[k] = v;
@@ -205,7 +207,7 @@ function forward(req, res, target, entry, isService) {
   };
   const send = () => {
     const upstream = http.request({
-      host: "localhost", port: target, method: req.method, path: req.url, headers,
+      host, port: target, method: req.method, path: req.url, headers,
       // Services: a fresh connection per request, so no reused socket can have been dropped by Virtuoso.
       agent: isService ? false : documentAgent,
     }, (up) => {
@@ -236,15 +238,31 @@ http.createServer((req, res) => {
   const publisher = decodeURIComponent(pathname.split("/").filter(Boolean)[0] || "") || null;
   const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher,
                   kind: documentKind(pathname), source: source(publisher) };
-  forward(req, res, map.documents.target, entry, false);
+  forward(req, res, map.documents, entry, false);
 }).listen(map.documents.port);
 
 for (const service of map.services) {
   http.createServer((req, res) => {
     const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher: service.publisher,
                     kind: "sparql", source: source(service.publisher) };
-    forward(req, res, service.target, entry, true);
+    forward(req, res, service, entry, true);
   }).listen(service.port);
+}
+
+// One upstream per server: the Solid server, and the first service on every Virtuoso host.
+function health() {
+  const targets = { documents: { ...map.documents, path: "/" } };
+  for (const s of map.services) {
+    const key = s.host || "localhost";
+    if (!targets[key]) targets[key] = { ...s, path: `/${s.publisher}/sparql` };
+  }
+  return Promise.all(Object.entries(targets).map(([name, t]) => new Promise((resolve) => {
+    const r = http.get({ host: t.host || "localhost", port: t.target, path: t.path, timeout: 2000,
+                         headers: { host: t.publisher ? `localhost:${t.target}` : `localhost:${map.documents.port}` } },
+                       (up) => { up.resume(); resolve([name, true]); });
+    r.on("timeout", () => r.destroy());
+    r.on("error", () => resolve([name, false]));
+  }))).then(Object.fromEntries);
 }
 
 http.createServer((req, res) => {
@@ -253,6 +271,10 @@ http.createServer((req, res) => {
     res.end(JSON.stringify(body, null, 2));
   };
   const url = new URL(req.url, "http://x");
+  if (req.method === "GET" && url.pathname === "/health") {
+    health().then((upstreams) => reply(Object.values(upstreams).every(Boolean) ? 200 : 503, upstreams));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/stats") {
     return reply(200, { ...stats, resources: resources(url.searchParams.get("samples") === "1") });
   }

@@ -193,6 +193,8 @@ uv run fedshop-discovery serve experiments/bsbm/snakefile/config.yaml --log-leve
 
 `fedshop-discovery check <config> query.sparql` analyses any query. FedShop's own data and Virtuoso containers are not used.
 
+**Overrides.** `fedshop-discovery --overrides file.yaml <step> <config>` merges the YAML file (keys of the `discovery` section) over the config; `--overrides` can be repeated and is applied in order. Give the same overrides to every step.
+
 ### Parameters
 
 Every parameter comes from the config's `discovery` section. These are the values that give the benchmark described here; a key left out of the config falls back to `DEFAULTS` in `fedshop/discovery/common.py`, which are the full values. Steps 6 and 7 also need the Virtuoso ports of step 4.
@@ -227,6 +229,9 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, plain, check | |
 | `virtuoso.catalog_container` | `fedshop-discovery-virtuoso-catalog` | same | load, serve | the catalog's graphs and services |
 | `virtuoso.catalog_isql_port` / `catalog_http_port` | 1113 / 8892 | same | load, check | |
+| `virtuoso.external` | false | same | load, build-workload, plain, check | the containers are run by someone else (jbr): steps only wait for them |
+| `virtuoso.host` / `catalog_host` | `localhost` / `localhost` | same | build-workload, plain, check, serve | where the containers are reached |
+| `virtuoso.wait_timeout` | 600 | same | steps that start Virtuoso | seconds to wait for the containers |
 | `virtuoso.first_service_port` | 34300 | same | own, load, serve | public port of the first query service; the rest follow |
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
 | `proxy.port_offset` | 10000 | same | load, serve | the Solid server and the services listen on their public port + this |
@@ -248,6 +253,16 @@ The WatDiv runs (steps 1–2) also read FedShop's `generation.schema.{product,ve
 | Triples / documents / services | 8,758,874 / 759,900 (280,923 of them category pages) / 141 | not rebuilt yet |
 
 The Virtuoso containers hold one config at a time: `load` switches, and `build-workload` and `check` refuse to run when they hold another config's data. Outputs go to `benchmark/discovery` (full) and `benchmark/discovery-small`.
+
+## Running with jbr
+
+`jbr-experiment-fedshop-discovery/` (in this repository, published separately) is a [jbr](https://github.com/rubensworks/jbr.js) experiment type for this benchmark: `jbr prepare` generates it and `jbr run` runs the workload against an engine hook, with correctness, request counts and CPU and memory per component for every query. It builds the generator as a Docker image from a commit of this repository and runs every step in containers on one Docker network:
+
+- **Data and documents:** `catalog`, `members`, `own`, `fragment`, and `load-scripts`, which writes the loading of both Virtuoso containers as `initdb.d` scripts (`virtuoso/<main|catalog>/load.sql`) instead of loading them with `docker exec`.
+- **Query services:** both Virtuoso containers load their graphs on first start, from those scripts.
+- **Workload:** `build-workload` and `plain` with `virtuoso.external`, against the containers by name, and `serving-plan`, which writes `serving.json`: the Solid server's command and the proxy's map, so the experiment serves the benchmark without reading the config itself.
+
+`base_url` names the proxy's container (`http://fedshop-proxy:3000/`), so the IRIs, the storage roots' service links and the queries' `SERVICE` clauses all resolve to the proxy on that network. See the package's README for its parameters and outputs.
 
 ## Running an engine
 

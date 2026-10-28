@@ -27,23 +27,45 @@ def cgroup(container):
     return f"/sys/fs/cgroup{path}"
 
 
-def write_proxy_map(dconf, owners, css_pid):
-    """The proxy's ports, publishers and the components it measures (proxy.json)."""
-    proxy_map = {
-        "documents": {"port": int(dconf.css["port"]), "target": dconf.internal_port(dconf.css["port"])},
-        "services": [{"port": i["port"], "target": dconf.internal_port(i["port"]), "publisher": n}
+def proxy_map(dconf, owners, documents_host="localhost"):
+    """The proxy's ports, publishers and upstream hosts, without the components it measures."""
+    v = dconf.virtuoso
+    return {
+        "documents": {"port": int(dconf.css["port"]), "target": dconf.internal_port(dconf.css["port"]),
+                      "host": documents_host},
+        "services": [{"port": i["port"], "target": dconf.internal_port(i["port"]), "publisher": n,
+                      "host": v["catalog_host"] if i["classical"] else v["host"]}
                      for n, i in owners.items() if i["service"]],
         "publishers": {n: {"kind": i["kind"], "catalog": i["classical"]} for n, i in owners.items()},
         "control_port": int(dconf.proxy["control_port"]),
         "max_inflight": int(dconf.proxy["max_inflight"]),
-        "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": [
-            {"name": "css", "pid": css_pid},
-            {"name": "catalog_endpoints", "cgroup": cgroup(dconf.virtuoso["catalog_container"])},
-            {"name": "discovered_endpoints", "cgroup": cgroup(dconf.virtuoso["container"])},
-        ]},
+        "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": []},
     }
+
+
+def serving_plan(dconf, owners, documents_host):
+    """What it takes to serve the benchmark elsewhere (jbr): the Solid server's command and the proxy's
+    map. Paths are absolute, as seen in the environment this runs in (the generator image)."""
+    return {
+        "base_url": dconf.base,
+        "proxy_host": dconf.public_host,
+        "css_command": command(dconf),
+        "web_dir": str(Path(dconf.path("web", "x")).parent.resolve()),
+        "proxy_script": str(Path(dconf.discovery_dir, "tools", "proxy", "proxy.js").resolve()),
+        "proxy_map": proxy_map(dconf, owners, documents_host),
+    }
+
+
+def write_proxy_map(dconf, owners, css_pid):
+    """The proxy's ports, publishers and the components it measures (proxy.json)."""
+    plan = proxy_map(dconf, owners)
+    plan["monitor"]["components"] = [
+        {"name": "css", "pid": css_pid},
+        {"name": "catalog_endpoints", "cgroup": cgroup(dconf.virtuoso["catalog_container"])},
+        {"name": "discovered_endpoints", "cgroup": cgroup(dconf.virtuoso["container"])},
+    ]
     path = dconf.path("proxy.json")
-    Path(path).write_text(json.dumps(proxy_map, indent=1))
+    Path(path).write_text(json.dumps(plan, indent=1))
     return path
 
 

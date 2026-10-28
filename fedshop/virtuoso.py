@@ -4,7 +4,8 @@ This module contains the utility functions to create a proxy between each named 
 
 - Once the data is ingested into the virtuoso, the data is stored in named graphs. 
 - In virtuoso, the default graph includes all named graphs.
-- By updating [DB.DBA.SYS_SPARQL_HOST](https://docs.openlinksw.com/virtuoso/rdfperfindexes/), we expose each named graph to a seperate host:
+- By updating [DB.DBA.SYS_SPARQL_HOST](https://docs.openlinksw.com/virtuoso/rdfperfindexes/), 
+we expose each named graph to a seperate host:
     SH_HOSTVARCHAR | SH_GRAPH_URIVARCHAR
     localhost:8895 | http://ex.org/swdf
     localhost:8896 | http://ex.org/yago

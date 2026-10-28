@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from omegaconf import OmegaConf
@@ -31,7 +32,8 @@ DEFAULTS = {
               "seed": 42},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
                  "http_port": 8891, "catalog_container": "fedshop-discovery-virtuoso-catalog",
-                 "catalog_isql_port": 1113, "catalog_http_port": 8892, "first_service_port": 34300},
+                 "catalog_isql_port": 1113, "catalog_http_port": 8892, "first_service_port": 34300,
+                 "external": False, "host": "localhost", "catalog_host": "localhost", "wait_timeout": 600},
     "css": {"port": 3000, "config": None},
     "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48, "sample_ms": 50},
     "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
@@ -39,14 +41,19 @@ DEFAULTS = {
 
 
 class DiscoveryConfig:
-    """FedShop config plus the `discovery` section, with defaults filled in."""
+    """FedShop config plus the `discovery` section, with defaults filled in.
 
-    def __init__(self, configfile):
+    overrides: YAML files with keys of the `discovery` section, merged over it in order. The same
+    files must be given to every step, so that all steps see the same parameters.
+    """
+
+    def __init__(self, configfile, overrides=()):
         self.configfile = configfile
         self.conf = load_config(configfile)
         gen = self.conf["generation"]
         section = self.conf.get("discovery")
-        section = OmegaConf.to_container(section, resolve=True) if section is not None else {}
+        section = OmegaConf.create(OmegaConf.to_container(section, resolve=True) if section is not None else {})
+        section = OmegaConf.to_container(OmegaConf.merge(section, *(OmegaConf.load(f) for f in overrides)), resolve=True)
 
         def merged(key):
             value = dict(DEFAULTS[key]) if isinstance(DEFAULTS[key], dict) else DEFAULTS[key]
@@ -81,7 +88,13 @@ class DiscoveryConfig:
     # The discovery Virtuoso container: every owner's graph, one query service per composite
     @property
     def endpoint(self):
-        return f"http://localhost:{self.virtuoso['http_port']}/sparql"
+        """The analysis endpoint: every publisher's graph."""
+        return f"http://{self.virtuoso['host']}:{self.virtuoso['http_port']}/sparql"
+
+    @property
+    def public_host(self):
+        """The host of the base URL; the query services are on the same host, on their own ports."""
+        return urlparse(self.base).hostname
 
     def internal_port(self, port):
         """Where the server behind the proxy listens for a public port (documents or a query service)."""
@@ -122,13 +135,15 @@ def read_nquads(path):
             yield triple
 
 
-def sparql_csv(endpoint, query, timeout=600):
-    """Run a SELECT query and return its rows as dicts (IRIs without brackets)."""
-    return list(csv.DictReader(io.StringIO(sparql_raw_csv(endpoint, query, timeout))))
+def sparql_csv(endpoint, query, timeout=600, host=None):
+    """Run a SELECT query and return its rows as dicts (IRIs without brackets).
+    host: the Host header to send, when the endpoint is selected by it (Virtuoso's virtual endpoints)."""
+    return list(csv.DictReader(io.StringIO(sparql_raw_csv(endpoint, query, timeout, host))))
 
 
-def sparql_raw_csv(endpoint, query, timeout=600):
-    r = requests.post(endpoint, data={"query": query}, headers={"Accept": "text/csv"}, timeout=timeout)
+def sparql_raw_csv(endpoint, query, timeout=600, host=None):
+    headers = {"Accept": "text/csv", **({"Host": host} if host else {})}
+    r = requests.post(endpoint, data={"query": query}, headers=headers, timeout=timeout)
     if r.status_code != 200:
         raise RuntimeError(f"SPARQL error {r.status_code}: {r.text[:500]}")
     return r.text
