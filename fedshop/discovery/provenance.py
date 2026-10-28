@@ -7,7 +7,7 @@ publisher: a SERVICE clause asks one source what it has. Every other pattern mat
 the answer is the query's answer over all published data.
 
 Reachability. Discovery starts at the publishers whose services the query names (or, for a query
-without SERVICE clauses, at the catalog). In each round the values the query binds lead further:
+without SERVICE clauses, at the known publishers). In each round the values the query binds lead further:
 its constants, and the terms of patterns supplied by reached publishers. An IRI leads to the
 storage that serves its document (dereference it; the storage root names the service, if any). A
 brand product leads, through the rdfs:seeAlso links of reached listings and of the brand itself, to
@@ -131,8 +131,8 @@ class Analyzer:
         self.base = dconf.base
         self.owners = owners
         self.ns = {n: i["storage"] for n, i in owners.items()}
-        self.classical = {i["storage"] for i in owners.values() if i["classical"]}
-        self.discovered = {i["storage"] for i in owners.values() if not i["classical"]}
+        self.known = {i["storage"] for i in owners.values() if i["known"]}
+        self.discovered = {i["storage"] for i in owners.values() if not i["known"]}
         self.reviewers = {i["storage"] for i in owners.values() if i["kind"] == "reviewer"}
         self.brands = {i["storage"] for i in owners.values() if i["kind"] == "producer"}
         self.lookup_only = {i["storage"] for i in owners.values() if not i["service"]}
@@ -166,7 +166,7 @@ class Analyzer:
 
     def reach(self, patterns, row):
         constants = {t[1:-1] for tp in patterns for t in tp if t.startswith("<")}
-        reached = set(self.classical) | {o for o in map(self.storage, constants) if o}
+        reached = set(self.known) | {o for o in map(self.storage, constants) if o}
         reached |= set().union(*(self.categories.get(c, set()) for c in constants))
         rounds = 1
         while True:
@@ -189,10 +189,10 @@ class Analyzer:
 
     def analyse(self, projection, patterns, rows, known=None):
         """known: the storages of the publishers the query names in SERVICE clauses. They are where
-        discovery starts and everything else counts as discovered. Without it, the catalog is."""
-        catalog = {i["storage"] for i in self.owners.values() if i["classical"]}
-        self.classical = catalog if known is None else set(known)
-        self.discovered = set(self.ns.values()) - self.classical
+        discovery starts and everything else counts as discovered. Without it, the known publishers are."""
+        known_publishers = {i["storage"] for i in self.owners.values() if i["known"]}
+        self.known = known_publishers if known is None else set(known)
+        self.discovered = set(self.ns.values()) - self.known
         solutions = defaultdict(list)
         for row in rows:
             solutions[tuple(row.get(v, "") for v in projection)].append(row)
@@ -201,31 +201,31 @@ class Analyzer:
         storages, needed, reached_any, max_rounds = set(), set(), set(), 0
         self.reachable = set()
         for key, derivs in solutions.items():
-            classical_only = mixed = discoverable = reached_mixed = False
+            known_only = mixed = discoverable = reached_mixed = False
             sol_needed = None
             for row in derivs:
                 graphs = {row[f"g{i}"] for i in range(1, len(patterns) + 1) if row.get(f"g{i}")}
                 storages |= graphs
                 found = graphs & self.discovered
-                classical_only |= not found
-                mixed |= bool(found) and bool(graphs & self.classical)
+                known_only |= not found
+                mixed |= bool(found) and bool(graphs & self.known)
                 reached, rounds = self.reach(patterns, row)
                 if graphs <= reached:
                     discoverable = True
-                    reached_mixed |= bool(found) and bool(graphs & self.classical)
+                    reached_mixed |= bool(found) and bool(graphs & self.known)
                     max_rounds = max(max_rounds, rounds)
                     reached_any |= reached & self.discovered
                 if sol_needed is None or len(found) < len(sol_needed):
                     sol_needed = found
-            stats["classical_only"] += classical_only
-            stats["needs_discovery"] += not classical_only
+            stats["known_only"] += known_only
+            stats["needs_discovery"] += not known_only
             stats["mixed"] += mixed
             stats["discoverable"] += discoverable
             if discoverable:
                 self.reachable.add(key)
-            stats["reachable_needing_discovery"] += discoverable and not classical_only
-            stats["reachable_mixed"] += reached_mixed and not classical_only
-            if not classical_only:
+            stats["reachable_needing_discovery"] += discoverable and not known_only
+            stats["reachable_mixed"] += reached_mixed and not known_only
+            if not known_only:
                 needed |= sol_needed
                 stats["needs_reviewers"] += bool(sol_needed & self.reviewers)
                 stats["needs_lookup_only"] += bool(sol_needed & self.lookup_only)
@@ -237,7 +237,7 @@ class Analyzer:
             category = "known-only"
         elif stats["mixed"] > 0:
             category = "hybrid-join"
-        elif stats["classical_only"] > 0:
+        elif stats["known_only"] > 0:
             category = "hybrid-union"
         else:
             category = "discovery-only"
@@ -246,7 +246,7 @@ class Analyzer:
             "category": category,
             "solutions": n,
             "derivations": len(rows),
-            "known_only_solutions": stats["classical_only"],
+            "known_only_solutions": stats["known_only"],
             "solutions_needing_discovery": stats["needs_discovery"],
             "solutions_needing_reviewers": stats["needs_reviewers"],
             "solutions_needing_lookup_only": stats["needs_lookup_only"],
@@ -256,8 +256,8 @@ class Analyzer:
             "reachable_needing_discovery": stats["reachable_needing_discovery"],
             "reachable_mixed": stats["reachable_mixed"],
             "storages_in_answer": short(storages),
-            "known": short(self.classical) if known is not None else [],
-            "discovered_in_answer": len(storages - self.classical),
+            "known": short(self.known) if known is not None else [],
+            "discovered_in_answer": len(storages - self.known),
             "storages_needed": short(needed),
             "brands_needed": len(needed & self.brands),
             "lookup_only_needed": len(needed & self.lookup_only),

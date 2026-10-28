@@ -1,7 +1,7 @@
 """Instantiate the templates, analyse every candidate and write the selected workload.
 
 Templates live in experiments/bsbm/discovery/queries with {{Name}} placeholders. The part of a
-query whose sources the user knows sits in SERVICE clauses on catalog members' endpoints ({{Shop}},
+query whose sources the user knows sits in SERVICE clauses on known publishers' endpoints ({{Shop}},
 {{Site}}, {{Taxonomy}}), as in FedShop's reference source assignment; the rest names no source and
 has to be discovered. Each template states in its header:
 
@@ -19,7 +19,7 @@ control, part of it needs a discovered publisher, can be reached, and involves a
 Every kept instance gets injected.sparql, results.csv (its answer over all published data, with
 SERVICE patterns answered by their service), reachable.csv and analysis.json. Its plain form,
 plain.sparql, is the same query without SERVICE clauses, for engines that select sources
-themselves (given the catalog's endpoints); it has its own answer, plain-results.csv, since without
+themselves (given the known endpoints); it has its own answer, plain-results.csv, since without
 SERVICE a pattern matches any publisher.
 """
 import csv
@@ -59,7 +59,7 @@ class Values:
         self.dconf = dconf
         self.endpoint = dconf.endpoint
         self.owners = owners
-        known = {n: i for n, i in owners.items() if i["classical"]}
+        known = {n: i for n, i in owners.items() if i["known"]}
         self.shops = sorted((n for n, i in known.items() if i["kind"] == "vendor"), key=lambda n: int(n[6:]))
         self.sites = sorted((n for n, i in known.items() if i["kind"] == "ratingsite"), key=lambda n: int(n[10:]))
         self.taxonomy = owners["taxonomy"]["endpoint"]
@@ -374,19 +374,19 @@ def write_instance(outdir, text, record, reference, projection, reachable):
 
 def write_sources(dconf, owners):
     outdir = Path(dconf.path("sources", "x")).parent
-    catalog = {n: i for n, i in owners.items() if i["classical"]}
-    with open(outdir / "catalog-endpoints.tsv", "w") as fs:
-        for name, info in catalog.items():
+    known = {n: i for n, i in owners.items() if i["known"]}
+    with open(outdir / "known-endpoints.tsv", "w") as fs:
+        for name, info in known.items():
             fs.write(f"{name}\t{info['storage']}\t{info['endpoint']}\n")
-    with open(outdir / "catalog-fedx.ttl", "w") as fs:
+    with open(outdir / "known-fedx.ttl", "w") as fs:
         fs.write("@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n"
                  "@prefix fedx: <http://rdf4j.org/config/federation#> .\n\n")
-        for info in catalog.values():
+        for info in known.values():
             fs.write(f'<{info["storage"]}> a sd:Service ;\n    fedx:store "SPARQLEndpoint";\n'
                      f'    sd:endpoint "{info["endpoint"]}";\n    fedx:supportsASKQueries true .\n\n')
-    with open(outdir / "discovered-storages.tsv", "w") as fs:   # for analysis only: an engine has to find these
+    with open(outdir / "discoverable-storages.tsv", "w") as fs:   # for analysis only: an engine has to find these
         for name, info in owners.items():
-            if not info["classical"]:
+            if not info["known"]:
                 fs.write(f"{name}\t{info['storage']}\t{info.get('endpoint') or ''}\n")
 
 

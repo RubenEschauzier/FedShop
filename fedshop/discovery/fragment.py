@@ -34,7 +34,8 @@ def tool(dconf, *parts):
 BATCH = 200   # source files per fragmenter run: Components.js reads a longer list recursively and overflows
 
 
-def config(dconf, owners, web_dir):
+def config(dconf, files, web_dir):
+    """files: graph files, relative to data/ (publishers.json's `file`)."""
     data_dir = Path(dconf.path("data", "x")).parent.resolve()
     return {
         "@context": "https://linkedsoftwaredependencies.org/bundles/npm/rdf-dataset-fragmenter/^2.0.0/components/context.jsonld",
@@ -42,7 +43,7 @@ def config(dconf, owners, web_dir):
         "@type": "Fragmenter",
         "quadSource": {
             "@type": "QuadSourceComposite",
-            "sources": [{"@type": "QuadSourceFile", "filePath": str(data_dir / f"{name}.nt")} for name in owners],
+            "sources": [{"@type": "QuadSourceFile", "filePath": str(data_dir / f)} for f in files],
         },
         "transformers": [],
         "fragmentationStrategy": {"@type": "FragmentationStrategySubject"},
@@ -62,8 +63,8 @@ def run(dconf, owners):
     web_dir.mkdir(parents=True)
     # Each owner's file holds only its own subjects and the file sink appends, so batches of owners
     # can be fragmented one after the other into the same documents.
-    names = list(owners)
-    batches = [names[i:i + BATCH] for i in range(0, len(names), BATCH)]
+    files = [info["file"] for info in owners.values()]
+    batches = [files[i:i + BATCH] for i in range(0, len(files), BATCH)]
     LOGGER.info(f"Fragmenting every owner's data with rdf-dataset-fragmenter ({len(batches)} runs)...")
     for i, batch in enumerate(batches):
         configfile = dconf.path("fragmenter", f"config-{i}.json")

@@ -1,11 +1,11 @@
 """The query services: two Virtuoso containers with a graph per publisher and a virtual endpoint per
 publisher with a service.
 
-- The main container holds every publisher's data (data/<publisher>.nt), each in the graph named by
-  its storage, so the analysis and the reference answers can see who holds what (the analysis
-  endpoint). It runs the services of the publishers outside the catalog: the discovered endpoints.
-- The catalog container holds the catalog's graphs and runs their services: the endpoints known up
-  front. Keeping them apart lets the proxy report CPU and memory for each.
+- The main container holds every publisher's data (data/, at publishers.json's `file`), each in the
+  graph named by its storage, so the analysis and the reference answers can see who holds what (the
+  analysis endpoint). It runs the services of the discoverable publishers: the discovered endpoints.
+- The known container holds the known publishers' graphs and runs their services: the endpoints
+  known up front. Keeping them apart lets the proxy report CPU and memory for each.
 
 A service is a virtual SPARQL endpoint, as FedShop builds them: a vhost on its own port (the public
 port + the proxy's offset) whose default graph is the publisher's graph. Publishers without a
@@ -21,10 +21,10 @@ ISQL = "/opt/virtuoso-opensource/bin/isql"
 
 
 def containers(dconf):
-    """(container, isql port, http port, host) of the main and the catalog container."""
+    """(container, isql port, http port, host) of the main and the known container."""
     v = dconf.virtuoso
     return {"main": (v["container"], v["isql_port"], v["http_port"], v["host"]),
-            "catalog": (v["catalog_container"], v["catalog_isql_port"], v["catalog_http_port"], v["catalog_host"])}
+            "known": (v["known_container"], v["known_isql_port"], v["known_http_port"], v["known_host"])}
 
 
 def isql(dconf, statements, which="main"):
@@ -54,16 +54,17 @@ def start(dconf):
 def statements(dconf, owners, which):
     """The SQL that loads a container's graphs (from /usr/share/proj) and defines its services."""
     data_dir = Path(dconf.path("data", "x")).parent
-    names = list(owners) if which == "main" else [n for n, i in owners.items() if i["classical"]]
-    load = [f"ld_dir('/usr/share/proj', '{n}.nt', '{owners[n]['storage']}');"
-            for n in names if Path(data_dir, f"{n}.nt").exists()]
+    names = list(owners) if which == "main" else [n for n, i in owners.items() if i["known"]]
+    files = {n: Path(owners[n]["file"]) for n in names if Path(data_dir, owners[n]["file"]).exists()}
+    load = [f"ld_dir('{Path('/usr/share/proj', f.parent)}', '{f.name}', '{owners[n]['storage']}');"
+            for n, f in files.items()]
     # Queries with VALUES (as engines send for bind joins) run through this view, which the
     # anonymous SPARQL user can't read by default
     services = ['GRANT SELECT ON DB.DBA.SPARQL_SINV_2 TO "SPARQL";',
                 'GRANT EXECUTE ON DB.DBA.SPARQL_SINV_IMP TO "SPARQL";']
     for name in names:
         info = owners[name]
-        if info["service"] and (which == "catalog") == info["classical"]:
+        if info["service"] and (which == "known") == info["known"]:
             port = dconf.internal_port(info["port"])        # the proxy serves the public port
             services += [
                 f"DB.DBA.VHOST_DEFINE(vhost=>'localhost', lhost=>':{port}', lpath=>'/{name}/sparql', "
@@ -78,7 +79,7 @@ def load(dconf, owners):
     """Recreate both containers from scratch, load the graphs and define the services."""
     compose(dconf, "down", "-v")
     start(dconf)
-    for which in ("main", "catalog"):
+    for which in ("main", "known"):
         load_sql, services = statements(dconf, owners, which)
         LOGGER.info(f"Loading {len(load_sql) - 1} files into {containers(dconf)[which][0]}...")
         isql(dconf, load_sql, which)
@@ -87,10 +88,10 @@ def load(dconf, owners):
 
 
 def write_load_scripts(dconf, owners):
-    """virtuoso/<main|catalog>/load.sql: the same loading as `load`, as a script for the container's
+    """virtuoso/<main|known>/load.sql: the same loading as `load`, as a script for the container's
     initdb.d (run once, when the container creates its database), with the data at /usr/share/proj."""
     paths = []
-    for which in ("main", "catalog"):
+    for which in ("main", "known"):
         load_sql, services = statements(dconf, owners, which)
         path = Path(dconf.path("virtuoso", which, "load.sql"))
         path.write_text("\n".join(load_sql + services + ["checkpoint;"]) + "\n")
@@ -100,7 +101,7 @@ def write_load_scripts(dconf, owners):
 
 def check(dconf, owners):
     """Triples per graph in both containers against publishers.json, and every service answering for its own graph only."""
-    for which, names in (("main", list(owners)), ("catalog", [n for n, i in owners.items() if i["classical"]])):
+    for which, names in (("main", list(owners)), ("known", [n for n, i in owners.items() if i["known"]])):
         container, _, http_port, host = containers(dconf)[which]
         counts = {r["g"]: int(r["n"]) for r in sparql_csv(f"http://{host}:{http_port}/sparql",
                                                           "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g")}
@@ -112,7 +113,7 @@ def check(dconf, owners):
             loaded = sum(counts.get(i["storage"], 0) for i in owners.values())
     for name, info in owners.items():
         if info["service"]:
-            host, port = containers(dconf)["catalog" if info["classical"] else "main"][3], dconf.internal_port(info["port"])
+            host, port = containers(dconf)["known" if info["known"] else "main"][3], dconf.internal_port(info["port"])
             internal = f"http://{host}:{port}/{name}/sparql"
             n = int(sparql_csv(internal, "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }", host=f"localhost:{port}")[0]["n"])
             if n != info["triples"]:

@@ -43,7 +43,7 @@ def members(configfile, force):
 @cli.command()
 @CONFIG
 def own(configfile):
-    """Restructure FedShop's data into publishers: data/<publisher>.nt, publishers.json, links.tsv, placements.nq."""
+    """Restructure FedShop's data into publishers: data/<known|discoverable>/..., publishers.json, links.tsv, placements.nq."""
     click.echo(json.dumps(ownership.run(config(configfile)), indent=2))
 
 
@@ -58,7 +58,7 @@ def load(configfile):
 @cli.command("load-scripts")
 @CONFIG
 def load_scripts(configfile):
-    """Write the loading of both Virtuoso containers as initdb.d scripts (virtuoso/<main|catalog>/load.sql),
+    """Write the loading of both Virtuoso containers as initdb.d scripts (virtuoso/<main|known>/load.sql),
     for running the containers elsewhere (jbr) instead of `load`."""
     dconf = config(configfile)
     click.echo("\n".join(store.write_load_scripts(dconf, load_owners(dconf))))

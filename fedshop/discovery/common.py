@@ -25,15 +25,15 @@ COUNTRIES = "http://downlode.org/rdf/iso-3166/countries#"
 
 DEFAULTS = {
     "base_url": "http://localhost:3000/",
-    "classical": {"ratio": 0.5, "seed": 42, "members": None},
+    "known": {"ratio": 0.5, "seed": 42, "members": None},
     "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000, "seed": 42},
     "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
               "seed": 42},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
-                 "http_port": 8891, "catalog_container": "fedshop-discovery-virtuoso-catalog",
-                 "catalog_isql_port": 1113, "catalog_http_port": 8892, "first_service_port": 34300,
-                 "external": False, "host": "localhost", "catalog_host": "localhost", "wait_timeout": 600},
+                 "http_port": 8891, "known_container": "fedshop-discovery-virtuoso-known",
+                 "known_isql_port": 1113, "known_http_port": 8892, "first_service_port": 34300,
+                 "external": False, "host": "localhost", "known_host": "localhost", "wait_timeout": 600},
     "css": {"port": 3000, "config": None},
     "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48, "sample_ms": 50},
     "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
@@ -67,7 +67,7 @@ class DiscoveryConfig:
         self.workdir = gen["workdir"]
         self.base = merged("base_url")
         self.members_conf = merged("members")
-        self.classical_conf = merged("classical")
+        self.known_conf = merged("known")
         self.brands_conf = merged("brands")
         self.links_conf = merged("links")
         self.virtuoso = merged("virtuoso")
@@ -107,6 +107,20 @@ class DiscoveryConfig:
         p = Path(self.outdir, *parts)
         p.parent.mkdir(parents=True, exist_ok=True)
         return str(p)
+
+    def data_file(self, name, info):
+        """A publisher's graph: data/<graph_file>."""
+        return self.path("data", graph_file(name, info))
+
+
+GROUPS = {"vendor": "shops", "ratingsite": "review-sites", "producer": "producers", "reviewer": "reviewers"}
+
+
+def graph_file(name, info):
+    """A publisher's graph file, relative to data/: known/ or discoverable/, then a directory per kind
+    (the taxonomy directly in known/). Only the files are split: IRIs don't tell known from discoverable."""
+    side = "known" if info["known"] else "discoverable"
+    return str(Path(side, f"{name}.nt") if info["kind"] == "taxonomy" else Path(side, GROUPS[info["kind"]], f"{name}.nt"))
 
 
 def owner_of(dconf, iri):

@@ -7,12 +7,12 @@
 //   documents: {port, target, host?}             public port of the Solid server, and the port (and
 //                                                host, default localhost) it listens on
 //   services: [{port, target, host?, publisher}]  one per query service
-//   publishers: {name: {kind, catalog}}    every publisher, and whether it is in the catalog
+//   publishers: {name: {kind, known}}      every publisher, and whether it is known up front
 //   control_port, max_inflight            control API; most requests in flight to Virtuoso at once
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
 //
 // Every request is counted by source and by kind:
-//   source: "known" (a publisher in the known set: by default the catalog), "discovered" (any other
+//   source: "known" (a publisher in the known set: by default the known publishers), "discovered" (any other
 //           publisher) or "other" (no publisher: the server root, unknown paths)
 //   kind:   "document", "storage-root" (/<publisher>/), "container" (another path ending in /),
 //           "server-root" (/) or "sparql" (a query service)
@@ -32,19 +32,19 @@
 //   GET  /health           200 when the Solid server and one service on every Virtuoso host answer, else 503
 //   POST /reset            zero both; optional JSON body {"label": "q07-2", "known": ["vendor13", "taxonomy"]}
 //                          sets the label written to the request log and the publishers counted as
-//                          known (default: the catalog)
+//                          known (default: the known publishers)
 "use strict";
 const fs = require("fs");
 const http = require("http");
 
 const map = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const log = process.argv[3] ? fs.createWriteStream(process.argv[3], { flags: "a" }) : null;
-const catalog = Object.keys(map.publishers).filter((name) => map.publishers[name].catalog);
+const knownPublishers = Object.keys(map.publishers).filter((name) => map.publishers[name].known);
 const KINDS = ["document", "storage-root", "container", "server-root", "sparql"];
 const { performance } = require("perf_hooks");
 
 let label = null;
-let known = new Set(catalog);
+let known = new Set(knownPublishers);
 let stats;
 
 function counter() {
@@ -285,7 +285,7 @@ http.createServer((req, res) => {
       let options = {};
       try { options = body.trim() ? JSON.parse(body) : {}; } catch (e) { return reply(400, { error: `Body is not JSON: ${e.message}` }); }
       label = options.label ?? null;
-      known = new Set(options.known ?? catalog);
+      known = new Set(options.known ?? knownPublishers);
       reset();
       reply(200, { label, known: stats.known });
     });

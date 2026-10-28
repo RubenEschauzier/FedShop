@@ -1,8 +1,8 @@
 # Query services of the discovery benchmark, on the internal ports behind the counting proxy (tools/proxy).
 # Two containers, so the proxy can report CPU and memory for each:
 # - fedshop-discovery-virtuoso: every publisher's graph (the analysis endpoint) and the services of
-#   the publishers outside the catalog (the discovered endpoints);
-# - fedshop-discovery-virtuoso-catalog: the catalog's graphs and their services (the endpoints known up front).
+#   the discoverable publishers (the discovered endpoints);
+# - fedshop-discovery-virtuoso-known: the known publishers' graphs and their services (the endpoints known up front).
 # Runs next to FedShop's own containers, on its own ports (discovery.virtuoso in the config must match).
 name: fedshop-discovery
 x-virtuoso: &virtuoso
@@ -39,12 +39,12 @@ services:
       VIRT_HTTPServer_ServerPort: 8891
       VIRT_Parameters_NumberOfBuffers: 340000
       VIRT_Parameters_MaxDirtyBuffers: 250000
-  fedshop-discovery-virtuoso-catalog:
+  fedshop-discovery-virtuoso-known:
     <<: *virtuoso
-    container_name: fedshop-discovery-virtuoso-catalog
+    container_name: fedshop-discovery-virtuoso-known
     environment:
       <<: *virtuoso-env
       VIRT_Parameters_ServerPort: 1113
       VIRT_HTTPServer_ServerPort: 8892
-      VIRT_Parameters_NumberOfBuffers: 85000      # the catalog is the taxonomy and half the shops and review sites
+      VIRT_Parameters_NumberOfBuffers: 85000      # the taxonomy and half the shops and review sites
       VIRT_Parameters_MaxDirtyBuffers: 62500

@@ -1,0 +1,12 @@
+# Only what the discovery generator needs; replaces the repository's .dockerignore for this image
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!scripts/build-watdiv.sh
+!fedshop/
+!experiments/bsbm/model/watdiv/
+!experiments/bsbm/snakefile/
+!experiments/bsbm/discovery/
+**/__pycache__/
+**/node_modules/

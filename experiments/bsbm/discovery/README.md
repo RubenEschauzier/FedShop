@@ -1,14 +1,14 @@
 # Discovery-based FedShop
 
-A marketplace built from FedShop's data and published as Linked Data: shops, review sites, brands, a taxonomy and reviewers each publish their data as documents, and many of them also run a SPARQL endpoint. A query engine starts from a catalog of known query services and has to discover the rest through references in the data.
+A marketplace built from FedShop's data and published as Linked Data: shops, review sites, brands, a taxonomy and reviewers each publish their data as documents, and many of them also run a SPARQL endpoint. A query engine starts from the query services it knows up front and has to discover the rest through references in the data.
 
 ## Publishers
 
-| Publisher | Publishes | Query service | In the catalog | Full config | Small config |
+| Publisher | Publishes | Query service | Known up front | Full config | Small config |
 |---|---|---|---|---|---|
 | Taxonomy | product types, product features, countries, links to the brands' category pages | yes | yes | 1 (434,538 triples) | 1 |
 | Brand (producer) | its products and their specification, its own record | the largest brands (`brands.service_share`) | never | 400 (100 with a service) | 40 (10) |
-| Shop (vendor) | its record, its offers, one listing per product it sells | yes | half (`classical.ratio`) | 20, ≈14,600 triples each | 20, ≈155 each |
+| Shop (vendor) | its record, its offers, one listing per product it sells | yes | half (`known.ratio`) | 20, ≈14,600 triples each | 20, ≈155 each |
 | Review site | its record, its reviews, one page per product it reviews | yes | half | 20, ≈76,600 triples each | 20, ≈730 each |
 | Reviewer | their profile | no | never | 9,277 | 87 |
 
@@ -44,7 +44,7 @@ The reference answer of every instance (`results.csv`) is its answer over all pu
 | What | Software | Where |
 |---|---|---|
 | Documents and storage roots | Community Solid Server 7.2.0 (`tools/css`, `css-config.json`), behind the proxy | `http://localhost:3000/` |
-| Query services of the catalog (known up front) | Virtuoso, container `fedshop-discovery-virtuoso-catalog` (`docker/virtuoso.yml`), behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
+| Query services of the known publishers | Virtuoso, container `fedshop-discovery-virtuoso-known` (`docker/virtuoso.yml`), behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
 | Query services of the other publishers (discovered) | Virtuoso, container `fedshop-discovery-virtuoso`, behind the proxy | `http://localhost:343xx/<publisher>/sparql` |
 | Request counts, CPU and memory per component | the counting proxy (`tools/proxy/proxy.js`) | control API on `http://localhost:3999/` |
 | Every publisher's graph, for the analysis only | container `fedshop-discovery-virtuoso`, not proxied | `http://localhost:8891/sparql` |
@@ -53,7 +53,7 @@ The reference answer of every instance (`results.csv`) is its answer over all pu
 - **Storage roots.** Each publisher's directory is a container. Its `.meta` types it as `pim:Storage` (CSS advertises that with `Link: <…pim/space#Storage>; rel="type"`) and names its service with `void:sparqlEndpoint`. CSS lists the documents with `ldp:contains`.
 - **The server root** (`/`) is not readable, so it can't be used as an index of all storages.
 - **Query services.** Each service is a Virtuoso virtual endpoint whose default graph is its publisher's graph, built the way FedShop builds its member endpoints. Its data equals the union of its publisher's documents.
-- **Containers.** Two Virtuoso containers, so CPU and memory can be told apart: `fedshop-discovery-virtuoso-catalog` holds the catalog's graphs and serves the catalog's services; `fedshop-discovery-virtuoso` holds every publisher's graph (the analysis endpoint) and serves the other services. They run next to FedShop's own containers, on their own ports (isql 1112 and 1113, HTTP 8891 and 8892, services on 44300 onwards behind the proxy), and never touch them. Their connection limits are raised (64 HTTP threads, 64 idle keep-alive connections): at Virtuoso's defaults (20 threads, 10 idle keep-alive connections) reused connections are dropped without notice, and engines fail with errors like "fetch failed".
+- **Containers.** Two Virtuoso containers, so CPU and memory can be told apart: `fedshop-discovery-virtuoso-known` holds the known publishers' graphs and serves their services; `fedshop-discovery-virtuoso` holds every publisher's graph (the analysis endpoint) and serves the discoverable publishers' services. They run next to FedShop's own containers, on their own ports (isql 1112 and 1113, HTTP 8891 and 8892, services on 44300 onwards behind the proxy), and never touch them. Their connection limits are raised (64 HTTP threads, 64 idle keep-alive connections): at Virtuoso's defaults (20 threads, 10 idle keep-alive connections) reused connections are dropped without notice, and engines fail with errors like "fetch failed".
 
 ### Counting requests
 
@@ -63,7 +63,7 @@ Every request is counted by source and by kind:
 
 | | Values |
 |---|---|
-| Source | `known`: a publisher in the known set (the catalog by default, or the publishers a query's `SERVICE` clauses name); `discovered`: any other publisher; `other`: no publisher (the server root) |
+| Source | `known`: a publisher in the known set (the known publishers by default, or the publishers a query's `SERVICE` clauses name); `discovered`: any other publisher; `other`: no publisher (the server root) |
 | Kind | `document`, `storage-root` (`/<publisher>/`), `container` (another path ending in `/`), `server-root` (`/`), `sparql` (a query service) |
 
 `GET /stats` gives the counts since the last reset: `total`, `known_sources`, `discovered_sources` and `other`, each with requests, bytes and errors per kind, plus counts per publisher. So requests to known sources against discovered ones are `known_sources.requests` and `discovered_sources.requests`, and the discovery work itself (documents and storage roots) against querying (`sparql`) is the split by kind.
@@ -82,7 +82,7 @@ curl localhost:3999/stats                                                       
 | Component | What is measured |
 |---|---|
 | `css` | the Solid server's process: CPU of all its threads, resident memory |
-| `catalog_endpoints` | the catalog container's cgroup: CPU, memory (`memory.current` − `inactive_file`, as `docker stats` reports it) |
+| `known_endpoints` | the known container's cgroup: CPU, memory (`memory.current` − `inactive_file`, as `docker stats` reports it) |
 | `discovered_endpoints` | the main container's cgroup, the same way |
 | `proxy` | the proxy itself, including its own sampling (about 2% of a core at 50 ms) |
 
@@ -90,7 +90,7 @@ For each: `cpu_seconds` and `cpu_percent.avg` are exact, from the CPU counters r
 
 ## How an engine finds things
 
-An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (catalog members: the taxonomy and half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
+An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (known publishers: the taxonomy and half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
 - **Any IRI leads to its storage.** Dereference it at CSS, walk up to the storage root, and read the service from the root. This covers a listing's `fs:listingOf` to a brand, a review's `rev:reviewer` to a reviewer, and a constant in the query.
 - **A product leads to other members.** Through the `rdfs:seeAlso` links of reached listings, and of the brand itself, it leads to the other shops' and review sites' listings of that product.
 - **A listing leads to its offers, a review page to its reviews.** Through the repeated `bsbm:product` and `bsbm:reviewFor` triples, which match the queries' patterns.
@@ -104,7 +104,7 @@ So an engine can answer a query either from documents alone, following links (as
 
 Templates in `queries/`, with `{{Name}}` placeholders. q01–q12 follow FedShop's templates; q13–q16 are new.
 
-**Known and open parts.** The part of a query whose sources the user knows sits in `SERVICE` clauses on catalog members' endpoints (`{{Shop}}`, `{{Site}}`, `{{Taxonomy}}`), as in FedShop's reference source assignment (RSA) queries. The rest names no source: the engine has to find it, through documents and links or through the services of the publishers it discovers. Federation over the known part is therefore a few targeted requests, and the work that varies is discovery and delegation to discovered services.
+**Known and open parts.** The part of a query whose sources the user knows sits in `SERVICE` clauses on known publishers' endpoints (`{{Shop}}`, `{{Site}}`, `{{Taxonomy}}`), as in FedShop's reference source assignment (RSA) queries. The rest names no source: the engine has to find it, through documents and links or through the services of the publishers it discovers. Federation over the known part is therefore a few targeted requests, and the work that varies is discovery and delegation to discovered services.
 
 | Query | Kind | Known part (`SERVICE`) | Open part |
 |---|---|---|---|
@@ -168,7 +168,7 @@ uv run fedshop-discovery catalog experiments/bsbm/snakefile/config.yaml
 uv run fedshop-discovery members experiments/bsbm/snakefile/config.yaml
 
 # 3. Publishers: FedShop's data restructured into publishers, links, placements, categories
-#    -> data/, publishers.json, links.tsv, placements.nq, categories.json
+#    -> data/known/, data/discoverable/, publishers.json, links.tsv, placements.nq, categories.json
 uv run fedshop-discovery own experiments/bsbm/snakefile/config.yaml
 
 # 4. Query services: (re)create the Virtuoso container from data/ (needs Docker)
@@ -215,9 +215,9 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `members.offers` | 2,000 | 20 | members | average offers per shop (`normal_dist(3, 1, avg)`) |
 | `members.reviews` | 10,000 | 100 | members | average reviews per review site; reviewers per site = reviews / 20 |
 | `members.seed` | 42 | same | members | each member's offer or review count |
-| `classical.ratio` | 0.5 | same | own | share of shops and of review sites in the catalog |
-| `classical.members` | – (drawn) | same | own | an explicit list of catalog members instead of drawing them |
-| `classical.seed` | 42 | same | own | which members are in the catalog |
+| `known.ratio` | 0.5 | same | own | share of shops and of review sites known up front |
+| `known.members` | – (drawn) | same | own | an explicit list of known shops and review sites instead of drawing them |
+| `known.seed` | 42 | same | own | which shops and review sites are known |
 | `links.reviews` | 2 | same | own | shop listing → review pages |
 | `links.where_to_buy` | 3 | same | own | review page → shop listings |
 | `links.also_reviewed` | 0 | same | own | review page → other review pages |
@@ -227,10 +227,10 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
 | `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load, serve | every graph (analysis) and the discovered services |
 | `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, plain, check | |
-| `virtuoso.catalog_container` | `fedshop-discovery-virtuoso-catalog` | same | load, serve | the catalog's graphs and services |
-| `virtuoso.catalog_isql_port` / `catalog_http_port` | 1113 / 8892 | same | load, check | |
+| `virtuoso.known_container` | `fedshop-discovery-virtuoso-known` | same | load, serve | the known publishers' graphs and services |
+| `virtuoso.known_isql_port` / `known_http_port` | 1113 / 8892 | same | load, check | |
 | `virtuoso.external` | false | same | load, build-workload, plain, check | the containers are run by someone else (jbr): steps only wait for them |
-| `virtuoso.host` / `catalog_host` | `localhost` / `localhost` | same | build-workload, plain, check, serve | where the containers are reached |
+| `virtuoso.host` / `known_host` | `localhost` / `localhost` | same | build-workload, plain, check, serve | where the containers are reached |
 | `virtuoso.wait_timeout` | 600 | same | steps that start Virtuoso | seconds to wait for the containers |
 | `virtuoso.first_service_port` | 34300 | same | own, load, serve | public port of the first query service; the rest follow |
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
@@ -256,9 +256,15 @@ The Virtuoso containers hold one config at a time: `load` switches, and `build-w
 
 ## Running with jbr
 
-`jbr-experiment-fedshop-discovery/` (in this repository, published separately) is a [jbr](https://github.com/rubensworks/jbr.js) experiment type for this benchmark: `jbr prepare` generates it and `jbr run` runs the workload against an engine hook, with correctness, request counts and CPU and memory per component for every query. It builds the generator as a Docker image from a commit of this repository and runs every step in containers on one Docker network:
+The npm package `@rubeneschauzier/fedshop-discovery` (its own project, `jbr-experiment-fedshop-discovery`) is a [jbr](https://github.com/rubensworks/jbr.js) experiment type for this benchmark: `jbr prepare` generates it and `jbr run` runs the workload against an engine hook, with correctness, request counts and CPU and memory per component for every query. It runs the generator image, built from this repository with `docker/Dockerfile-generator` and published, by digest:
 
-- **Data and documents:** `catalog`, `members`, `own`, `fragment`, and `load-scripts`, which writes the loading of both Virtuoso containers as `initdb.d` scripts (`virtuoso/<main|catalog>/load.sql`) instead of loading them with `docker exec`.
+```bash
+docker build -f experiments/bsbm/discovery/docker/Dockerfile-generator -t <registry>/fedshop-discovery-generator:<version> .
+```
+
+Every step runs in containers on one Docker network:
+
+- **Data and documents:** `catalog`, `members`, `own`, `fragment`, and `load-scripts`, which writes the loading of both Virtuoso containers as `initdb.d` scripts (`virtuoso/<main|known>/load.sql`) instead of loading them with `docker exec`.
 - **Query services:** both Virtuoso containers load their graphs on first start, from those scripts.
 - **Workload:** `build-workload` and `plain` with `virtuoso.external`, against the containers by name, and `serving-plan`, which writes `serving.json`: the Solid server's command and the proxy's map, so the experiment serves the benchmark without reading the config itself.
 
@@ -269,7 +275,7 @@ The Virtuoso containers hold one config at a time: `load` switches, and `build-w
 The benchmark has no runner of its own; runners live in their own project. What an engine gets per instance (`workload/<query>/instance_<i>/`):
 
 - **The query.** `injected.sparql`: its `SERVICE` clauses name the endpoints the user knows. Seeds for traversal are the query's own IRIs. No endpoint list is given.
-- **Or its plain form.** `plain.sparql` is the same query without `SERVICE` clauses, for engines that select sources themselves: give them the catalog's endpoints (`sources/catalog-endpoints.tsv`) and the seeds. Without `SERVICE`, a pattern matches any publisher, so the plain form has its own answer, `plain-results.csv`; where `SERVICE` named "my shop" (q06, q07, q10, q15, q16) it is larger.
+- **Or its plain form.** `plain.sparql` is the same query without `SERVICE` clauses, for engines that select sources themselves: give them the known endpoints (`sources/known-endpoints.tsv`) and the seeds. Without `SERVICE`, a pattern matches any publisher, so the plain form has its own answer, `plain-results.csv`; where `SERVICE` named "my shop" (q06, q07, q10, q15, q16) it is larger.
 - **The reference answer.** `results.csv` (or `plain-results.csv`). Compare answers as sets: publishers with a service serve every triple twice, from their service and from their documents, so an engine that merges sources as a bag repeats rows. All templates are `SELECT DISTINCT`.
 - **Request counts.** Before an instance, `POST /reset` on the proxy's control port with the instance as label and, for the `SERVICE` form, the publishers its `SERVICE` clauses name as `known`; after it, `GET /stats` (see Serving).
 
@@ -277,15 +283,16 @@ The benchmark has no runner of its own; runners live in their own project. What 
 
 | File | Content |
 |---|---|
-| `catalog/` | the WatDiv run for the brand catalogs |
-| `members/` | the WatDiv runs for the shops and review sites |
-| `data/<publisher>.nt` | every publisher's triples, as loaded into Virtuoso |
-| `publishers.json` | every publisher: kind, storage, in the catalog or not, service and endpoint, triples |
+| `catalog/` | the WatDiv run for the product catalog (products, producers, types, features); generation only |
+| `members/` | the WatDiv runs for the shops and review sites; generation only |
+| `data/known/` | the known publishers' triples: `taxonomy.nt`, `shops/`, `review-sites/` |
+| `data/discoverable/` | the other publishers' triples: `shops/`, `review-sites/`, `producers/`, `reviewers/` |
+| `publishers.json` | every publisher: kind, known or not, storage, graph file, service and endpoint, triples |
 | `links.tsv` | every link: product, publisher, from, peer, to |
 | `placements.nq` | triples placed in another document than their subject's, with that document as graph |
 | `categories.json` | every product type and the brands with a category page for it |
-| `web/` | the documents CSS serves |
-| `sources/` | the catalog (`catalog-endpoints.tsv`, `catalog-fedx.ttl`); `discovered-storages.tsv` is for analysis only |
+| `web/` | the documents CSS serves, by URL path (not split: IRIs don't tell known from discoverable) |
+| `sources/` | the known endpoints (`known-endpoints.tsv`, `known-fedx.ttl`); `discoverable-storages.tsv` is for analysis only |
 | `workload/<query>/instance_<i>/` | `injected.sparql`, `results.csv`, `reachable.csv`, `analysis.json`; `plain.sparql`, `plain-results.csv` |
 | `proxy.json` | the proxy's ports and publishers, written by `serve` |
 | `workload-summary.csv` | every candidate, kept or not, and why |

@@ -5,7 +5,7 @@ The proxy holds the public ports: css.port for documents and every query service
 server and Virtuoso's services listen on their public port + proxy.port_offset, so engines reach
 them only through the proxy, and every request is counted by source (known or discovered publisher)
 and by kind (document, storage root, SPARQL). The proxy also measures CPU and memory of the Solid
-server, of each Virtuoso container (catalog endpoints, discovered endpoints) and of itself.
+server, of each Virtuoso container (known endpoints, discovered endpoints) and of itself.
 """
 import json
 import subprocess
@@ -34,9 +34,9 @@ def proxy_map(dconf, owners, documents_host="localhost"):
         "documents": {"port": int(dconf.css["port"]), "target": dconf.internal_port(dconf.css["port"]),
                       "host": documents_host},
         "services": [{"port": i["port"], "target": dconf.internal_port(i["port"]), "publisher": n,
-                      "host": v["catalog_host"] if i["classical"] else v["host"]}
+                      "host": v["known_host"] if i["known"] else v["host"]}
                      for n, i in owners.items() if i["service"]],
-        "publishers": {n: {"kind": i["kind"], "catalog": i["classical"]} for n, i in owners.items()},
+        "publishers": {n: {"kind": i["kind"], "known": i["known"]} for n, i in owners.items()},
         "control_port": int(dconf.proxy["control_port"]),
         "max_inflight": int(dconf.proxy["max_inflight"]),
         "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": []},
@@ -61,7 +61,7 @@ def write_proxy_map(dconf, owners, css_pid):
     plan = proxy_map(dconf, owners)
     plan["monitor"]["components"] = [
         {"name": "css", "pid": css_pid},
-        {"name": "catalog_endpoints", "cgroup": cgroup(dconf.virtuoso["catalog_container"])},
+        {"name": "known_endpoints", "cgroup": cgroup(dconf.virtuoso["known_container"])},
         {"name": "discovered_endpoints", "cgroup": cgroup(dconf.virtuoso["container"])},
     ]
     path = dconf.path("proxy.json")

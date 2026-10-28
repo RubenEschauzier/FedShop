@@ -34,8 +34,9 @@ in a second document of the same publisher, so the data behind the services does
 - a brand's own record (<brand>/ProducerN) repeats `<product> bsbm:producer <record>` of each of
   its products, as a brand's catalog page lists its range.
 
-Everything is written as one N-Triples file per publisher (data/<publisher>.nt), with the IRIs the
-documents are served at. Triples placed in a document
+Everything is written as one N-Triples file per publisher, with the IRIs the documents are served
+at: data/known/ (the taxonomy, shops/, review-sites/) and data/discoverable/ (shops/, review-sites/,
+producers/, reviewers/), as publishers.json's `file` says. Triples placed in a document
 other than their subject's (the copies above) are written to placements.nq, with that document as
 graph.
 """
@@ -47,7 +48,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .catalog import Catalog
-from .common import BSBM, COUNTRIES, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABEL, SEEALSO, read_nquads
+from .common import BSBM, COUNTRIES, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABEL, SEEALSO, graph_file, read_nquads
 
 FEDSHOP_MEMBER = re.compile(r"^http://www\.((?:vendor|ratingsite)\d+)\.fr/(.*)$")
 GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
@@ -102,13 +103,13 @@ def doc(iri):
     return iri.split("#", 1)[0]
 
 
-def choose_classical(dconf, names):
-    """Shops and review sites in the catalog, stratified over both kinds."""
-    explicit = dconf.classical_conf.get("members")
+def choose_known(dconf, names):
+    """Shops and review sites known up front, stratified over both kinds."""
+    explicit = dconf.known_conf.get("members")
     if explicit:
         return sorted(set(explicit) & set(names), key=lambda n: (kind_of(n), number(n)))
-    rng = random.Random(dconf.classical_conf.get("seed", 42))
-    ratio = float(dconf.classical_conf.get("ratio", 0.5))
+    rng = random.Random(dconf.known_conf.get("seed", 42))
+    ratio = float(dconf.known_conf.get("ratio", 0.5))
     chosen = []
     for kind in ("vendor", "ratingsite"):
         group = sorted((n for n in names if kind_of(n) == kind), key=number)
@@ -308,19 +309,20 @@ class Ownership:
     # ----- owners -----
     def owners(self):
         dconf = self.dconf
-        classical = set(choose_classical(dconf, self.members))
-        owners = {"taxonomy": {"kind": "taxonomy", "classical": True, "service": True}}
+        known = set(choose_known(dconf, self.members))
+        owners = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
         for m in self.members:
-            owners[m] = {"kind": kind_of(m), "classical": m in classical, "service": True}
+            owners[m] = {"kind": kind_of(m), "known": m in known, "service": True}
         for brand in range(self.catalog.count):
-            owners[self.brand_name(brand)] = {"kind": "producer", "classical": False,
+            owners[self.brand_name(brand)] = {"kind": "producer", "known": False,
                                               "service": brand in self.catalog.services,
                                               "products": self.catalog.sizes[brand]}
         for r in self.reviewers:
-            owners[r] = {"kind": "reviewer", "classical": False, "service": False}
+            owners[r] = {"kind": "reviewer", "known": False, "service": False}
         port = int(dconf.virtuoso["first_service_port"])
         for name, info in owners.items():
             info["storage"] = dconf.ns(name)
+            info["file"] = graph_file(name, info)
             info["triples"] = len(self.data[name])
             if info["service"]:
                 info["port"] = port
@@ -341,10 +343,10 @@ class Ownership:
 
 def write(dconf, own, owners):
     data_dir = Path(dconf.path("data", "x")).parent
-    for old in data_dir.glob("*.nt"):
+    for old in data_dir.rglob("*.nt"):
         old.unlink()
-    for name in owners:
-        Path(data_dir, f"{name}.nt").write_text("".join(sorted(set(own.data[name]))))
+    for name, info in owners.items():
+        Path(dconf.data_file(name, info)).write_text("".join(sorted(set(own.data[name]))))
     Path(dconf.path("publishers.json")).write_text(json.dumps(owners, indent=2))
     Path(dconf.path("placements.nq")).write_text("".join(sorted(set(own.placements))))
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(own.categories.items())}, indent=1))
@@ -367,7 +369,7 @@ def run(dconf):
     for info in owners.values():
         k = kinds[info["kind"]]
         k["owners"] += 1
-        k["classical"] += info["classical"]
+        k["known"] += info["known"]
         k["services"] += info["service"]
         k["triples"] += info["triples"]
     summary = {"owners": {k: dict(v) for k, v in kinds.items()},
