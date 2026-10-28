@@ -196,7 +196,7 @@ def replace_select_projection_with_graph(node):
             return CompValue(
                 "SelectQuery",
                 modifier="DISTINCT",
-                projection=graph_vars,
+                projection=[ CompValue("vars", var=v) for v in graph_vars ],
                 where=node["where"]
             )
         
@@ -512,7 +512,7 @@ def translateAlgebra(query_algebra):
             # 18.2 Query Forms
             if node.name == "SelectQuery":
                 overwrite(
-                    identation + "-*-SELECT-*- WHERE " + "{" + node.p.name + "}" + breakline_token +
+                    identation + "-*-SELECT-*- " + "{" + node.p.name + "}" + breakline_token +
                     identation + breakline_token
                 )
                 identation_level += 1
@@ -803,7 +803,7 @@ def translateAlgebra(query_algebra):
                 replace(
                     "{Project}",
                     " ".join(project_variables) + " "
-                    + "{" + breakline_token
+                    + "WHERE {" + breakline_token
                     + "{" + node.p.name + "}" + breakline_token
                     + "}" + breakline_token
                     + "{GroupBy}" + breakline_token
@@ -835,7 +835,7 @@ def translateAlgebra(query_algebra):
                         "{ToMultiSet}", 
                         (
                             #identation + "{" + breakline_token + 
-                            next_level_identation + "-*-SELECT-*- WHERE " + "{" + node.p.name + "}" + breakline_token
+                            next_level_identation + "-*-SELECT-*- " + "{" + node.p.name + "}" + breakline_token
                             #identation + "}" + breakline_token
                         )
                     )

@@ -11,6 +11,7 @@ dependencies = [
     "snakemake==7.18.1",
     "sparqlwrapper==2.0.0",
     "rdflib==6.2.0",
+    "pyoxigraph==0.4.11",
     "fasttext-langdetect==1.0.3",
     "nltk==3.9b1",
     "wget==3.2",
@@ -48,6 +49,7 @@ fedshop-engine-hibiscus = "fedshop.engines.hibiscus:cli"
 fedshop-engine-odyssey = "fedshop.engines.odyssey:cli"
 fedshop-engine-fedup = "fedshop.engines.fedup:cli"
 fedshop-engine-rsa = "fedshop.engines.rsa:cli"
+fedshop-discovery = "fedshop.discovery.cli:cli"
 
 [build-system]
 requires = ["hatchling"]

@@ -131,3 +131,53 @@ evaluation:
       service_name: "jena-fuseki"
       endpoint: "http://localhost:3030/FedShop/query"
       container_name: "docker-jena-fuseki-1"
+
+# Discovery-based variant (fedshop-discovery, see experiments/bsbm/discovery/README.md)
+discovery:
+  base_url: "http://localhost:3000/"   # every owner's namespace is <base_url><owner>/ (served by CSS)
+  classical:                     # shops and review sites in the catalog the engine starts from (the taxonomy is always in it)
+    ratio: 0.5                   # stratified over shops and review sites
+    seed: 42
+  members:                       # shops and review sites, generated with FedShop's templates against the brand catalog
+    shops: 20                    # FedShop's batch 1 size; the rates below are FedShop's full ones
+    review_sites: 20
+    pool: 20000                  # products shops and review sites deal in: about 1 offer and 5 reviews per product
+    offers: 2000                 # FedShop's average offers per shop (normal_dist avg)
+    reviews: 10000               # FedShop's average reviews per review site; reviewers = reviews / 20
+    seed: 42
+  brands:                        # producers own their products; never in the catalog, always discovered
+    products: 200000             # products in all brand catalogs together (more than members.pool)
+    count: 400
+    zipf: 0.8                    # brand size ~ rank^-zipf: a few big brands, a moderate long tail
+    min_products: 20
+    service_share: 0.25          # the largest brands (this share) run a query service; the rest is lookup-only
+    seed: 42
+  links:                         # rdfs:seeAlso between listings of the same product: peers per listing, or "all"
+    reviews: 2                   # shop listing -> review site pages
+    where_to_buy: 3              # review site page -> shop listings
+    also_reviewed: 0             # review site page -> other review site pages
+    brand_where_to_buy: 2        # brand product -> shop listings
+    brand_reviews: all           # brand product -> review site pages: every page that reviews it ("reviewed at")
+    seed: 42
+  virtuoso:                      # one container for every owner's query service, next to FedShop's own containers
+    compose_file: "${generation.workdir}/discovery/docker/virtuoso.yml"
+    container: fedshop-discovery-virtuoso
+    isql_port: 1112
+    http_port: 8891              # the analysis endpoint: every publisher's graph
+    catalog_container: fedshop-discovery-virtuoso-catalog   # the catalog's graphs and services, measured apart
+    catalog_isql_port: 1113
+    catalog_http_port: 8892
+    first_service_port: 34300
+  css:
+    port: 3000
+    config: "${generation.workdir}/discovery/css-config.json"
+  proxy:                         # counting proxy on the public ports (css.port, the service ports); engines only see it
+    port_offset: 10000           # the Solid server and Virtuoso's services listen on their public port + this
+    control_port: 3999           # GET /stats, POST /reset
+    max_inflight: 48             # requests to Virtuoso at once; the rest wait in the proxy
+    sample_ms: 50                # CPU and memory sampling interval for min/max (totals are exact)
+  workload:
+    per_template: 5
+    max_candidates: 40
+    max_rows: 100000
+    seed: 42

@@ -1,0 +1,27 @@
+PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dc: <http://purl.org/dc/elements/1.1/>
+PREFIX rev: <http://purl.org/stuff/rev#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX fs: <http://fedshop.example.org/vocab#>
+
+# FedShop q10: a price check: offers for a product at other shops, cheaper than my shop's and delivered within some days.
+# kind: product
+# rows: 2-40
+# discovered: 2
+SELECT DISTINCT ?offer ?price ?vendor ?deliveryDays WHERE {
+    SERVICE <{{Shop}}> {
+        ?myListing fs:listingOf <{{Product}}> .
+        ?myOffer bsbm:product ?myListing .
+        ?myOffer bsbm:price ?myPrice .
+    }
+    ?listing fs:listingOf <{{Product}}> .
+    ?offer bsbm:product ?listing .
+    ?offer bsbm:price ?price .
+    FILTER (?price < ?myPrice)
+    ?offer bsbm:vendor ?vendor .
+    ?offer bsbm:deliveryDays ?deliveryDays .
+    FILTER (?deliveryDays <= {{days}})
+}

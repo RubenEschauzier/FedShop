@@ -198,10 +198,11 @@ def ping(endpoint):
         "http": "",
         "https": "",
     }
+    # True as soon as the server answers, so that `while not ping(...)` actually waits for it to start
     try:
-        response = requests.get(endpoint, proxies=proxies)
+        response = requests.get(endpoint, proxies=proxies, timeout=10)
         # print(response.status_code, response.text)
-        return response.status_code
-    except: return -1
+        return True
+    except: return False
 
 
