@@ -19,6 +19,7 @@ RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 SEEALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"
 OWL_SAMEAS = "http://www.w3.org/2002/07/owl#sameAs"
+DCTERMS_IDENTIFIER = "http://purl.org/dc/terms/identifier"
 PIM_STORAGE = "http://www.w3.org/ns/pim/space#Storage"
 VOID_ENDPOINT = "http://rdfs.org/ns/void#sparqlEndpoint"
 COUNTRIES = "http://downlode.org/rdf/iso-3166/countries#"
@@ -26,6 +27,7 @@ COUNTRIES = "http://downlode.org/rdf/iso-3166/countries#"
 DEFAULTS = {
     "base_url": "http://localhost:3000/",
     "known": {"ratio": 0.5, "seed": 42, "members": None},
+    "layout": {"product_pages": 0.5, "seed": 42},
     "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000, "seed": 42},
     "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
@@ -68,6 +70,7 @@ class DiscoveryConfig:
         self.base = merged("base_url")
         self.members_conf = merged("members")
         self.known_conf = merged("known")
+        self.layout_conf = merged("layout")
         self.brands_conf = merged("brands")
         self.links_conf = merged("links")
         self.virtuoso = merged("virtuoso")
@@ -131,6 +134,13 @@ def graph_file(name, info):
     (the taxonomy directly in known/). Only the files are split: IRIs don't tell known from discoverable."""
     side = "known" if info["known"] else "discoverable"
     return str(Path(side, f"{name}.nt") if info["kind"] == "taxonomy" else Path(side, GROUPS[info["kind"]], f"{name}.nt"))
+
+
+def graph_order(line):
+    """Sort key of a graph file's N-Triples lines: by subject, with the subject's rdf:type first
+    (rdf-dataset-fragmenter recognises a resource by its type, see layout.py)."""
+    s, p, _ = line.split(" ", 2)
+    return s, p != f"<{RDF_TYPE}>", line
 
 
 def publisher_of(dconf, iri):

@@ -1,15 +1,14 @@
 # Query services of the discovery benchmark, on the internal ports behind the counting proxy (tools/proxy).
 # Two containers, so the proxy can report CPU and memory for each:
-# - fedshop-discovery-virtuoso: every publisher's graph (the analysis endpoint) and the services of
-#   the discoverable publishers (the discovered endpoints);
-# - fedshop-discovery-virtuoso-known: the known publishers' graphs and their services (the endpoints known up front).
-# Runs next to FedShop's own containers, on its own ports (discovery.virtuoso in the config must match).
+# - fedshop-discovery-virtuoso: The discoverable data for which an endpoint should exist
+# - fedshop-discovery-virtuoso-known: the endpoints known at start of query (traditional federation members)
 name: fedshop-discovery
 x-virtuoso: &virtuoso
   image: openlink/virtuoso-opensource-7:7.2.13-alpine
   network_mode: "host"
+  # set by fedshop-discovery from the config
   volumes:
-    - "${FEDSHOP_DISCOVERY_DATA:-../../benchmark/discovery/data}:/usr/share/proj"   # set by fedshop-discovery from the config
+    - "${FEDSHOP_DISCOVERY_DATA:-../../benchmark/discovery/data}:/usr/share/proj"   
 x-virtuoso-env: &virtuoso-env
   SPARQL_UPDATE: "false"
   DBA_PASSWORD: "dba"
@@ -24,7 +23,7 @@ x-virtuoso-env: &virtuoso-env
   VIRT_SPARQL_MaxQueryCostEstimationTime: 0
   VIRT_SPARQL_ResultSetMaxRows: 0
   VIRT_SPARQL_MaxQueryExecutionTime: 0
-  VIRT_Parameters_MaxQueryMem: 2G
+  VIRT_Parameters_MaxQueryMem: 4G
   VIRT_Parameters_ServerThreads: 100
   VIRT_Parameters_MaxClientConnections: 100
   VIRT_Parameters_CheckpointInterval: 0

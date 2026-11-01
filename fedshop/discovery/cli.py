@@ -51,7 +51,8 @@ def members(configfile, force):
 @cli.command()
 @CONFIG
 def publish(configfile):
-    """Restructure FedShop's data into publishers: data/<known|discoverable>/..., publishers.json, links.tsv, placements.nq."""
+    """Restructure FedShop's data into publishers and lay out their documents: data/<known|discoverable>/...,
+    publishers.json, links.tsv, placements.nq."""
     click.echo(json.dumps(publishing.run(config(configfile)), indent=2))
 
 

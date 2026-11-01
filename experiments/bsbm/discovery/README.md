@@ -18,18 +18,24 @@ Every publisher has a storage `<base_url><publisher>/` (`http://localhost:3000/v
 
 An entity's IRI is the URL of its document plus `#it`: the offer `vendor13/Offer7#it` is described in the document `vendor13/Offer7`. What the server says about a document (its type, size, modification date) is then not about the entity. Below, entities are named by their document.
 
+Shops and review sites lay out their documents in one of two ways (`layout`, half each):
+
+- **A document per offer or review**, as above, next to a listing per product.
+- **Product pages.** The listing holds its offers or reviews, as web shops publish product pages: the offer is `vendor13/Product42#Offer7`, described in the listing's document `vendor13/Product42`, so it resolves there.
+
 ## Data model
 
 - **Generation.** Everything comes from FedShop's own WatDiv templates, run by the benchmark into its own folder; FedShop's datasets are not used or changed.
   - **Product catalog:** FedShop's product template for `brands.products` products (200,000 full, 20,000 small) and `brands.count` producers. Numbers of types and features follow from the catalog size by FedShop's formulas.
   - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded.
 - **Brands.** A brand's product `producer22/Product77` carries the full BSBM specification: label, comment, types, features, numeric and textual properties, producer. Brand sizes follow rank^-`zipf` (0.8) with at least `min_products`: in the full config 16,676 products for the largest brand and 136 for the smallest, and the 100 brands with a service hold 67% of all products.
-- **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/Product77>`. Offers and reviews point to the listing, as in FedShop.
+- **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/Product77>`. Offers and reviews point to the listing, as in FedShop, and state their local name (`dcterms:identifier "Offer7"`), from which the product-page layout makes their IRI.
+- **Layouts.** Which shops and review sites have product pages is drawn per kind and per known or not (`layout.product_pages`), so each of the four groups is split alike. The layout changes IRIs, not triples: rdf-dataset-fragmenter rewrites the offers and reviews of product-page publishers to `<listing>#<identifier>` in the graph files, with its `QuadTransformerRemapResourceIdentifier` (`fedshop/discovery/layout.py`), before they are loaded, so the services, the workload and the reference answers use the IRIs the documents use. Reviewers' `foaf:made` links follow.
 - **Reviewers.** Reviewer profiles move out of the review sites into `reviewer<k>/profile`. Reviews point to them with `rev:reviewer`, and a profile lists the reviews its reviewer wrote, at any review site, with `foaf:made`.
 - **Taxonomy.** FedShop's types and features, without copies, plus every country as `taxonomy/countries#US`. Each type links with `rdfs:seeAlso` to the category pages of the brands that make it.
 - **Links.** `rdfs:seeAlso` between listings of the same product: a shop's listing to `reviews` (2) review pages, a review page to `where_to_buy` (3) listings, a review page to `also_reviewed` (0) other pages. A brand's product links to `brand_where_to_buy` (2) listings and to every review page of the product (`brand_reviews: all`, "reviewed at"). Peers are drawn per listing, seeded. Shops never link to shops, and review sites don't link to each other.
 - **Documents for traversal.** Some documents repeat triples their publisher already states in another document, so that a traversal engine following the query's patterns (cMatch: a triple matching a pattern leads to the IRIs in it) gets from one document to the next. The data behind the services doesn't change.
-  - **Listings and review pages** repeat `<offer> bsbm:product <listing>` of each of their offers and `<review> bsbm:reviewFor <page>` of each of their reviews, so a reached listing leads to its offers and a review page to its reviews.
+  - **Listings and review pages** repeat `<offer> bsbm:product <listing>` of each of their offers and `<review> bsbm:reviewFor <page>` of each of their reviews, so a reached listing leads to its offers and a review page to its reviews. Product pages hold their offers and reviews already.
   - **Category pages.** A brand has a page per product type it makes (`producer22/types/ProductType551`) that repeats `<product> rdf:type <type>` of its products of that type. With the taxonomy's links, a type in a query leads to every product of that type.
   - **Brand records.** A brand's own record (`producer22/Producer22`) repeats `<product> bsbm:producer <record>` of each of its products, as a brand's catalog page lists its range.
 
@@ -167,7 +173,8 @@ uv run fedshop-discovery catalog experiments/bsbm/snakefile/config.yaml
 #    existing members are kept (--force regenerates) -> members/
 uv run fedshop-discovery members experiments/bsbm/snakefile/config.yaml
 
-# 3. Publishers: FedShop's data restructured into publishers, links, placements, categories
+# 3. Publishers: FedShop's data restructured into publishers, links, placements, categories, and
+#    the product pages' IRIs rewritten with rdf-dataset-fragmenter (layout/)
 #    -> data/known/, data/discoverable/, publishers.json, links.tsv, placements.nq, categories.json
 uv run fedshop-discovery publish experiments/bsbm/snakefile/config.yaml
 
@@ -215,6 +222,8 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `known.ratio` | 0.5 | same | publish | share of shops and of review sites known up front |
 | `known.members` | – (drawn) | same | publish | an explicit list of known shops and review sites instead of drawing them |
 | `known.seed` | 42 | same | publish | which shops and review sites are known |
+| `layout.product_pages` | 0.5 | same | publish | share of shops and of review sites, known and not, with product pages |
+| `layout.seed` | 42 | same | publish | which shops and review sites have product pages |
 | `links.reviews` | 2 | same | publish | shop listing → review pages |
 | `links.where_to_buy` | 3 | same | publish | review page → shop listings |
 | `links.also_reviewed` | 0 | same | publish | review page → other review pages |
@@ -284,7 +293,8 @@ The benchmark has no runner of its own; runners live in their own project. What 
 | `members/` | the WatDiv runs for the shops and review sites; generation only |
 | `data/known/` | the known publishers' triples: `taxonomy.nt`, `shops/`, `review-sites/` |
 | `data/discoverable/` | the other publishers' triples: `shops/`, `review-sites/`, `producers/`, `reviewers/` |
-| `publishers.json` | every publisher: kind, known or not, storage, graph file, service and endpoint, triples |
+| `publishers.json` | every publisher: kind, known or not, layout (shops and review sites), storage, graph file, service and endpoint, triples |
+| `layout/` | the fragmenter run that rewrote the product pages' IRIs: its config, input and output; generation only |
 | `links.tsv` | every link: product, publisher, from, peer, to |
 | `placements.nq` | triples placed in another document than their subject's, with that document as graph |
 | `categories.json` | every product type and the brands with a category page for it |
@@ -303,8 +313,9 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands publish 200,000 products, most of them sold nowhere.
 - **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment.
 - **Links and category pages are new.** FedShop has no links between members and no documents.
-- **IRIs.** All IRIs move under `http://localhost:3000/<publisher>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy.
-- **Literals.** Dates gain their time of day (FedShop's `"2008-04-22"^^xsd:dateTime` is not a valid dateTime) and prices become `xsd:decimal` instead of `xsd:double`. That way documents and Virtuoso write every triple the same way.
+- **IRIs.** All IRIs move under `http://localhost:3000/<publisher>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy. Offers and reviews of product pages become `<listing>#Offer7`.
+- **Identifiers.** Offers and reviews gain `dcterms:identifier` with their FedShop local name.
+- **Literals.** Dates gain their time of day (FedShop's `"2008-04-22"^^xsd:dateTime` is not a valid dateTime) and prices become `xsd:decimal` instead of `xsd:double`, without trailing zeros (`"8325.70"` is written `"8325.7"`, as Virtuoso writes it). That way documents and Virtuoso write every triple the same way, and an engine that reads a triple from both gets one term.
 
 **Federation**
 - **Known sources in `SERVICE` clauses instead of a fixed federation.** Only part of the federation is known up front: the taxonomy and half of the shops and review sites. A query names the ones it uses in `SERVICE` clauses, as FedShop's RSA queries do; everything else is discovered.

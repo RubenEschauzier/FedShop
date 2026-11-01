@@ -13,7 +13,9 @@ type it deals with, linked to a global BSBM IRI with owl:sameAs. Here each is de
 An entity's IRI is the URL of the document that describes it plus `#it` (<base>vendor13/Offer7#it in
 document <base>vendor13/Offer7), so what a server says about the document (its size, its type,
 when it changed) is not about the entity. Countries keep their hash IRIs in one document
-(<base>taxonomy/countries#ES).
+(<base>taxonomy/countries#ES). Shops and review sites with product pages (layout.py) describe their
+offers and reviews in their listings instead (<base>vendor13/Product42#Offer7); every offer and review
+states its identifier (`dcterms:identifier "Offer7"`) for that.
 
 A listing (or review page) keeps FedShop's local product IRI but no longer repeats the product:
 it says `fs:listingOf <brand product>`. Offers and reviews point to the listing, as in FedShop.
@@ -27,7 +29,8 @@ query pattern leads to the IRIs in it). They are copies of triples the publisher
 in a second document of the same publisher, so the data behind the services doesn't change:
 
 - a listing's document repeats `<offer> bsbm:product <listing>` of each of its offers, and a
-  review page's document `<review> bsbm:reviewFor <page>` of each of its reviews;
+  review page's document `<review> bsbm:reviewFor <page>` of each of its reviews (not with product
+  pages, where the listing holds its offers or reviews);
 - a brand has a category page per product type it makes (<brand>/types/ProductTypeN) repeating
   `<product> rdf:type <type>` of its products of that type, and the taxonomy's type links to the
   brands' pages with rdfs:seeAlso (these links are the taxonomy's own triples).
@@ -35,8 +38,8 @@ in a second document of the same publisher, so the data behind the services does
   its products, as a brand's catalog page lists its range.
 
 Everything is written as one N-Triples file per publisher, with the IRIs the documents are served
-at: data/known/ (the taxonomy, shops/, review-sites/) and data/discoverable/ (shops/, review-sites/,
-producers/, reviewers/), as publishers.json's `file` says. Triples placed in a document
+at (after the layout): data/known/ (the taxonomy, shops/, review-sites/) and data/discoverable/
+(shops/, review-sites/, producers/, reviewers/), as publishers.json's `file` says. Triples placed in a document
 other than their subject's (the copies above) are written to placements.nq, with that document as
 graph.
 """
@@ -47,8 +50,10 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from . import layout
 from .catalog import Catalog
-from .common import BSBM, COUNTRIES, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABEL, SEEALSO, graph_file, read_nquads
+from .common import (BSBM, COUNTRIES, DCTERMS_IDENTIFIER, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABEL, SEEALSO,
+                     graph_file, graph_order, read_nquads)
 
 FEDSHOP_MEMBER = re.compile(r"^http://www\.((?:vendor|ratingsite)\d+)\.fr/(.*)$")
 GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
@@ -73,14 +78,19 @@ def canonical_literal(term):
 
     FedShop writes dates as "2008-04-22"^^xsd:dateTime (not a valid dateTime; Virtuoso returns it
     with T00:00:00) and prices as xsd:double (which Virtuoso returns with binary noise). Dates get
-    their time of day and prices become xsd:decimal.
+    their time of day and prices become xsd:decimal, without trailing zeros as Virtuoso writes them
+    ("8325.70" is "8325.7", "8325.00" is "8325"): otherwise an engine that reads a price from both
+    a document and a service gets two different terms.
     """
     m = DATE_ONLY.match(term)
     if m:
         return f'"{m.group(1)}T00:00:00"^^<{XSD}dateTime>'
     m = DOUBLE.match(term)
     if m:
-        return f'"{m.group(1)}"^^<{XSD}decimal>'
+        value = m.group(1)
+        if "." in value:
+            value = value.rstrip("0").rstrip(".") or "0"
+        return f'"{value}"^^<{XSD}decimal>'
     return term
 
 
@@ -115,6 +125,18 @@ def choose_known(dconf, names):
     return sorted(chosen, key=lambda n: (kind_of(n), number(n)))
 
 
+def choose_product_pages(dconf, names, known):
+    """Shops and review sites with product pages, stratified over both kinds and over known or not."""
+    rng = random.Random(dconf.layout_conf.get("seed", 42))
+    share = float(dconf.layout_conf.get("product_pages", 0.5))
+    chosen = []
+    for kind in ("vendor", "ratingsite"):
+        for is_known in (True, False):
+            group = sorted((n for n in names if kind_of(n) == kind and (n in known) == is_known), key=number)
+            chosen += rng.sample(group, round(share * len(group)))
+    return set(chosen)
+
+
 class Publishing:
     """FedShop's catalog and members, restructured into publishers: build() fills every publisher's
     triples, the links and the placements, and returns publishers.json."""
@@ -130,6 +152,8 @@ class Publishing:
         self.countries = set()
         self.reviewer_iri = {}                 # (site, local Person name) -> reviewer IRI
         self.reviewers = []
+        self.known = set(choose_known(dconf, self.members))
+        self.product_pages = choose_product_pages(dconf, self.members, self.known)
 
     # ----- IRIs -----
     def brand_name(self, brand):
@@ -186,9 +210,13 @@ class Publishing:
     def build_members(self):
         for member in self.members:
             copies = {}
+            identified = set()
             for s, p, o in self.read(member):
                 local = FEDSHOP_MEMBER.match(s[1:-1]).group(2)
                 kind = LOCAL.match(local).group(1)
+                if kind in ("Offer", "Review") and local not in identified:
+                    identified.add(local)
+                    self.data[member].append(nt(self.map_term(s), f"<{DCTERMS_IDENTIFIER}>", f'"{local}"'))
                 if kind == "Product":
                     if p == f"<{OWL_SAMEAS}>":
                         copies[s] = int(GLOBAL.match(o[1:-1][len(BSBM):]).group(2))
@@ -283,7 +311,7 @@ class Publishing:
             self.placements.append(f"{line[:-3]} <{document}> .\n")
 
         backlinks = (f"<{BSBM}product>", f"<{BSBM}reviewFor>")
-        for member in self.members:
+        for member in (m for m in self.members if m not in self.product_pages):
             for line in self.data[member]:
                 s, p, o = line[:-3].split(" ", 2)
                 if p in backlinks:
@@ -308,12 +336,13 @@ class Publishing:
 
     # ----- publishers.json -----
     def publishers(self):
-        """Every publisher: kind, known or not, service, storage, graph file, triples, port and endpoint."""
+        """Every publisher: kind, known or not, service, layout (shops and review sites), storage, graph
+        file, triples, port and endpoint."""
         dconf = self.dconf
-        known = set(choose_known(dconf, self.members))
         publishers = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
         for m in self.members:
-            publishers[m] = {"kind": kind_of(m), "known": m in known, "service": True}
+            publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": True,
+                             "layout": layout.PRODUCT_PAGES if m in self.product_pages else layout.PER_RESOURCE}
         for brand in range(self.catalog.count):
             publishers[self.brand_name(brand)] = {"kind": "producer", "known": False,
                                               "service": brand in self.catalog.services,
@@ -346,7 +375,7 @@ def write(dconf, pub, publishers):
     for old in dconf.dir("data").rglob("*.nt"):
         old.unlink()
     for name, info in publishers.items():
-        Path(dconf.data_file(name, info)).write_text("".join(sorted(set(pub.data[name]))))
+        Path(dconf.data_file(name, info)).write_text("".join(sorted(set(pub.data[name]), key=graph_order)))
     Path(dconf.path("publishers.json")).write_text(json.dumps(publishers, indent=2))
     Path(dconf.path("placements.nq")).write_text("".join(sorted(set(pub.placements))))
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(pub.categories.items())}, indent=1))
@@ -365,12 +394,14 @@ def run(dconf):
     pub = Publishing(dconf)
     publishers = pub.build()
     write(dconf, pub, publishers)
+    layout.run(dconf, publishers)
     kinds = defaultdict(lambda: defaultdict(int))
     for info in publishers.values():
         k = kinds[info["kind"]]
         k["publishers"] += 1
         k["known"] += info["known"]
         k["services"] += info["service"]
+        k["product_pages"] += info.get("layout") == layout.PRODUCT_PAGES
         k["triples"] += info["triples"]
     summary = {"publishers": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in pub.listings.values()), "listed_products": len(pub.listings),
