@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-import os
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,7 +14,7 @@ from ..utils import fedshop_logger, load_config
 LOGGER = fedshop_logger(Path(__file__).name)
 
 BSBM = "http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/"
-FS = "http://fedshop.example.org/vocab#"        
+FS = "http://fedshop.example.org/vocab#"
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 SEEALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"
@@ -75,17 +75,16 @@ class DiscoveryConfig:
         self.proxy = merged("proxy")
         self.workload_conf = merged("workload")
         self.outdir = section.get("workdir") or f"{self.workdir}/benchmark/discovery"
-        self.dataset_dir = f"{self.outdir}/members"       
+        self.members_dir = f"{self.outdir}/members"
         self.discovery_dir = f"{self.workdir}/discovery"
         self.virtuoso["compose_file"] = self.virtuoso["compose_file"] or f"{self.discovery_dir}/docker/virtuoso.yml"
         self.css["config"] = self.css["config"] or f"{self.discovery_dir}/css-config.json"
         self.workload_conf["templates_dir"] = self.workload_conf["templates_dir"] or f"{self.discovery_dir}/queries"
 
-        self.pool = int(self.members_conf["pool"])                    
+        self.pool = int(self.members_conf["pool"])
         self.member_names = ([f"vendor{i}" for i in range(int(self.members_conf["shops"]))]
                              + [f"ratingsite{i}" for i in range(int(self.members_conf["review_sites"]))])
 
-    # The discovery Virtuoso container: every owner's graph, one query service per composite
     @property
     def endpoint(self):
         """The analysis endpoint: every publisher's graph."""
@@ -100,13 +99,24 @@ class DiscoveryConfig:
         """Where the server behind the proxy listens for a public port (documents or a query service)."""
         return int(port) + int(self.proxy["port_offset"])
 
-    def ns(self, owner):
-        return f"{self.base}{owner}/"
+    def ns(self, publisher):
+        return f"{self.base}{publisher}/"
 
     def path(self, *parts):
+        """A file under the output directory, its directory created."""
         p = Path(self.outdir, *parts)
         p.parent.mkdir(parents=True, exist_ok=True)
         return str(p)
+
+    def dir(self, *parts):
+        """A directory under the output directory, created, as an absolute Path."""
+        p = Path(self.outdir, *parts).resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def tool(self, *parts):
+        """A file of the benchmark's Node tools (tools/css, tools/fragmenter, tools/proxy)."""
+        return str(Path(self.discovery_dir, "tools", *parts).resolve())
 
     def data_file(self, name, info):
         """A publisher's graph: data/<graph_file>."""
@@ -123,15 +133,15 @@ def graph_file(name, info):
     return str(Path(side, f"{name}.nt") if info["kind"] == "taxonomy" else Path(side, GROUPS[info["kind"]], f"{name}.nt"))
 
 
-def owner_of(dconf, iri):
-    """The owner (first path segment under the base URL) of an IRI, or None."""
+def publisher_of(dconf, iri):
+    """The publisher (first path segment under the base URL) of an IRI, or None."""
     if not iri.startswith(dconf.base):
         return None
     rest = iri[len(dconf.base):]
     return rest.split("/", 1)[0] if "/" in rest else None
 
 
-def load_owners(dconf):
+def load_publishers(dconf):
     with open(dconf.path("publishers.json")) as fs:
         return json.load(fs)
 
@@ -164,7 +174,6 @@ def sparql_raw_csv(endpoint, query, timeout=600, host=None):
 
 
 def wait_for(url, timeout=300):
-    import time
     start = time.time()
     while time.time() - start < timeout:
         try:

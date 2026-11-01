@@ -1,6 +1,6 @@
 """The marketplace's raw data, generated with FedShop's own WatDiv templates.
 
-- Brand catalogs: FedShop's product template, run once for `brands.products` products and
+- Product catalog: FedShop's product template, run once for `brands.products` products and
   `brands.count` producers. Numbers of product types and features follow from the catalog size
   through FedShop's (BSBM's) formulas.
 - Shops and review sites: FedShop's vendor and rating-site templates, one run per member, against
@@ -16,7 +16,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 - `dconf.configfile`: the FedShop config. Its `generation.schema.{product,vendor,ratingsite}`
   sections give the WatDiv templates and their word counts; the counts below override theirs.
 - `dconf.brands_conf`: `discovery.brands`
-    products       int    products in all brand catalogs together           200000
+    products       int    products in the catalog, over all brands           200000
     count          int    brands (producers)                                400
     zipf           float  brand size ~ rank^-zipf                           0.8
     min_products   int    products of the smallest brand                    20
@@ -29,7 +29,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 - `dconf.pool`: `discovery.members.pool`, products shops and review sites deal in     20000
 - `dconf.member_names`: vendor0..vendor<shops-1>, ratingsite0..ratingsite<review_sites-1>,
   from `discovery.members.shops` and `.review_sites`                                   20, 20
-- `dconf.dataset_dir`: where the members go, <outdir>/members
+- `dconf.members_dir`: where the members go, <outdir>/members
 - `dconf.path(...)`: a path under <outdir> (`discovery.workdir`, default
   <generation.workdir>/benchmark/discovery), its parent directory created
 """
@@ -50,13 +50,13 @@ def watdiv_dir(dconf):
 
 
 def generate(dconf, force=False):
-    """Run FedShop's product template for the brand catalogs (once; `force` regenerates).
+    """Run FedShop's product template for the product catalog (once; `force` regenerates).
 
     Reads dconf.configfile, dconf.brands_conf["products"] and ["count"]; writes <outdir>/catalog/.
     """
     out = Path(watdiv_dir(dconf))
     if out.exists() and any(out.glob("Product/*.nq")) and not force:
-        LOGGER.info(f"Brand catalog already generated in {out}")
+        LOGGER.info(f"Product catalog already generated in {out}")
         return
     conf = load_config(dconf.configfile)
     params = conf.generation.schema.product.params
@@ -78,14 +78,13 @@ def fedshop_count(rng, avg, mu=3, sigma=1):
 
 
 def generate_members(dconf, force=False):
-    """Run FedShop's vendor and rating-site templates against the brand catalog, one run per member.
+    """Run FedShop's vendor and rating-site templates against the product catalog, one run per member.
 
     Reads dconf.configfile, dconf.members_conf["offers"], ["reviews"] and ["seed"], dconf.pool and
-    dconf.member_names; needs <outdir>/catalog/ (generate) and writes dconf.dataset_dir.
+    dconf.member_names; needs <outdir>/catalog/ (generate) and writes dconf.members_dir.
     An existing member is kept unless `force`.
     """
-    out = Path(dconf.dataset_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    out = dconf.dir("members")
     conf = dconf.members_conf
     catalog_products = str(Path(watdiv_dir(dconf)))
     for name in dconf.member_names:

@@ -31,9 +31,9 @@ import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .common import BSBM, FS, LOGGER, RDF_TYPE, RDFS_LABEL, load_owners, owner_of, sparql_csv, sparql_raw_csv
-from .ownership import read_links
-from .provenance import MODIFIERS, TERM, Analyzer, _expand, derivations, rewrite, service_endpoints
+from .common import BSBM, LOGGER, RDF_TYPE, RDFS_LABEL, load_publishers, publisher_of, sparql_csv, sparql_raw_csv
+from .provenance import MODIFIERS, TERM, Analyzer, derivations, expand, rewrite, service_endpoints
+from .publishing import number, read_links
 
 FIELDS = ["query", "instance", "kind", "selected", "reason", "category", "solutions", "reachable_share",
           "reachable_needing_discovery", "reachable_mixed", "discovered_in_answer", "solutions_needing_reviewers",
@@ -43,6 +43,7 @@ PREFIXES = """PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocab
 PREFIX fs: <http://fedshop.example.org/vocab#>
 PREFIX rev: <http://purl.org/stuff/rev#>
 """
+
 
 def template_meta(text):
     """The header of a template: kind, rows (lo, hi) and discovered."""
@@ -55,19 +56,19 @@ def template_meta(text):
 class Values:
     """What the templates' values are drawn from, read from the publishers' graphs."""
 
-    def __init__(self, dconf, owners):
+    def __init__(self, dconf, publishers):
         self.dconf = dconf
         self.endpoint = dconf.endpoint
-        self.owners = owners
-        known = {n: i for n, i in owners.items() if i["known"]}
-        self.shops = sorted((n for n, i in known.items() if i["kind"] == "vendor"), key=lambda n: int(n[6:]))
-        self.sites = sorted((n for n, i in known.items() if i["kind"] == "ratingsite"), key=lambda n: int(n[10:]))
-        self.taxonomy = owners["taxonomy"]["endpoint"]
+        self.publishers = publishers
+        known = {n: i for n, i in publishers.items() if i["known"]}
+        self.shops = sorted((n for n, i in known.items() if i["kind"] == "vendor"), key=number)
+        self.sites = sorted((n for n, i in known.items() if i["kind"] == "ratingsite"), key=number)
+        self.taxonomy = publishers["taxonomy"]["endpoint"]
 
         self.offers_at = defaultdict(lambda: defaultdict(list))   # shop -> product -> offers
         self.offer_count = Counter()
         for r in self.rows("SELECT ?g ?x ?o WHERE { GRAPH ?g { ?l fs:listingOf ?x . ?o bsbm:product ?l } }"):
-            self.offers_at[owner_of(dconf, r["g"])][r["x"]].append(r["o"])
+            self.offers_at[publisher_of(dconf, r["g"])][r["x"]].append(r["o"])
             self.offer_count[r["x"]] += 1
         self.sold = sorted(self.offer_count)
         self.reviews_at = defaultdict(list)                         # site -> reviews
@@ -75,7 +76,7 @@ class Values:
         self.review_sites = defaultdict(set)
         for r in self.rows("SELECT ?g ?x ?r ?lang WHERE { GRAPH ?g { ?l fs:listingOf ?x . ?r bsbm:reviewFor ?l . ?r rev:text ?t } "
                            "BIND(lang(?t) AS ?lang) }"):
-            site = owner_of(dconf, r["g"])
+            site = publisher_of(dconf, r["g"])
             self.reviews_at[site].append(r["r"])
             self.review_count[r["x"]] += 1
             self.english_count[r["x"]] += r["lang"] == "en"
@@ -99,7 +100,7 @@ class Values:
         for x, ts in self.types.items():
             for t in ts:
                 self.of_type[t].add(x)
-        self.brand_sold = Counter(owner_of(dconf, x) for x in self.sold)
+        self.brand_sold = Counter(publisher_of(dconf, x) for x in self.sold)
         ratings = {int(r["r"]): int(r["n"]) for r in self.rows(
             "SELECT ?r (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?x bsbm:rating1 ?r } } GROUP BY ?r")}
         reviews = sum(self.review_count.values())
@@ -110,7 +111,7 @@ class Values:
                           "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" + query)
 
     def endpoint_of(self, name):
-        return self.owners[name]["endpoint"]
+        return self.publishers[name]["endpoint"]
 
 
 def rating_threshold(values, reviews, target):
@@ -148,7 +149,10 @@ def candidates(values, query, rng, limit, meta):
                 feature = rng.choice(sorted(values.features[rng.choice(pool)]) or ["none"])
                 yield {"ProductType": t, "x": x, "y": y, "ProductFeature": feature}
             else:
-                other = rng.choice([u for u in types if u != t])
+                others = [u for u in types if u != t]
+                if not others:                                            # one type with enough products
+                    continue
+                other = rng.choice(others)
                 half = max(1, target() // 2)
                 yield {"ProductType1": t, "ProductType2": other,
                        "x": threshold_above([values.num[p].get(1, 0) for p in pool], half),
@@ -189,7 +193,7 @@ def candidates(values, query, rng, limit, meta):
             offers = sorted(o for os in values.offers_at[shop].values() for o in os)
             yield {"Shop": values.endpoint_of(shop), "Offer": rng.choice(offers)}
     elif query == "q13":
-        pool = [x for x in values.sold if lo <= values.brand_sold[owner_of(values.dconf, x)] <= hi]
+        pool = [x for x in values.sold if lo <= values.brand_sold[publisher_of(values.dconf, x)] <= hi]
         for product in shuffled(pool)[:limit]:
             yield {"Product": product}
     elif query == "q14":
@@ -230,7 +234,7 @@ def pattern_layout(query):
         s = line.strip()
         single = re.match(r"^OPTIONAL\s*\{\s*(.+?)\s*\.?\s*\}\s*$", s, re.I)
         if single:
-            layout.append((tuple(_expand(t, prefixes) for t in TERM.findall(single.group(1).rstrip(".").strip())), True, branch))
+            layout.append((tuple(expand(t, prefixes) for t in TERM.findall(single.group(1).rstrip(".").strip())), True, branch))
             continue
         if re.match(r"^OPTIONAL\s*\{\s*$", s, re.I):
             depth += 1
@@ -249,7 +253,7 @@ def pattern_layout(query):
             continue
         if s and not s.upper().startswith(("FILTER", "SELECT", "PREFIX", "ORDER", "#")) and s.endswith(".") \
                 and len(TERM.findall(s.rstrip("."))) == 3:
-            layout.append((tuple(_expand(t, prefixes) for t in TERM.findall(s.rstrip(".").strip())), bool(optional_depth), branch))
+            layout.append((tuple(expand(t, prefixes) for t in TERM.findall(s.rstrip(".").strip())), bool(optional_depth), branch))
     return layout
 
 
@@ -261,7 +265,7 @@ def variables(text):
     return set(re.findall(r"\?\w+", text))
 
 
-def gains(dconf, owners, query, patterns, rows, known, per_service=3):
+def gains(dconf, publishers, query, patterns, rows, known, per_service=3):
     """What sending a sub-query to a service saves, for the sub-queries services supply in the answer.
 
     For every derivation and service, B' is the set of required patterns that service supplied.
@@ -271,7 +275,7 @@ def gains(dconf, owners, query, patterns, rows, known, per_service=3):
     layout = pattern_layout(query)
     if len(layout) != len(patterns):
         return []
-    services = {i["storage"]: n for n, i in owners.items() if i["service"]}
+    services = {i["storage"]: n for n, i in publishers.items() if i["service"]}
     required = [i for i, (_, optional, _) in enumerate(layout, start=1) if not optional]
     fl = filters(query)
     subqueries = defaultdict(set)
@@ -348,16 +352,6 @@ def write_plain(dconf, inst, services):
         Path(inst, "plain-results.csv").write_text(sparql_raw_csv(dconf.endpoint, reference_query(plain, services)))
 
 
-def plain_forms(dconf):
-    """Write the plain form of every instance of an existing workload."""
-    owners = load_owners(dconf)
-    services = service_map(owners)
-    insts = sorted(Path(dconf.outdir, "workload").glob("q*/instance_*"))
-    for inst in insts:
-        write_plain(dconf, inst, services)
-    return insts
-
-
 # ----- writing -----
 def write_instance(outdir, text, record, reference, projection, reachable):
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -372,9 +366,9 @@ def write_instance(outdir, text, record, reference, projection, reachable):
     Path(outdir, "analysis.json").write_text(json.dumps(record, indent=2))
 
 
-def write_sources(dconf, owners):
-    outdir = Path(dconf.path("sources", "x")).parent
-    known = {n: i for n, i in owners.items() if i["known"]}
+def write_sources(dconf, publishers):
+    outdir = dconf.dir("sources")
+    known = {n: i for n, i in publishers.items() if i["known"]}
     with open(outdir / "known-endpoints.tsv", "w") as fs:
         for name, info in known.items():
             fs.write(f"{name}\t{info['storage']}\t{info['endpoint']}\n")
@@ -385,24 +379,24 @@ def write_sources(dconf, owners):
             fs.write(f'<{info["storage"]}> a sd:Service ;\n    fedx:store "SPARQLEndpoint";\n'
                      f'    sd:endpoint "{info["endpoint"]}";\n    fedx:supportsASKQueries true .\n\n')
     with open(outdir / "discoverable-storages.tsv", "w") as fs:   # for analysis only: an engine has to find these
-        for name, info in owners.items():
+        for name, info in publishers.items():
             if not info["known"]:
                 fs.write(f"{name}\t{info['storage']}\t{info.get('endpoint') or ''}\n")
 
 
-def service_map(owners):
+def service_map(publishers):
     """Endpoint -> storage of every publisher with a service."""
-    return {i["endpoint"]: i["storage"] for i in owners.values() if i["service"]}
+    return {i["endpoint"]: i["storage"] for i in publishers.values() if i["service"]}
 
 
-def analyse(dconf, owners, analyzer, text):
+def analyse(dconf, publishers, analyzer, text):
     max_rows = dconf.workload_conf["max_rows"]
-    services = service_map(owners)
+    services = service_map(publishers)
     endpoints = service_endpoints(text)
-    known = {services[e] for e in endpoints if e in services} if endpoints else None
+    known = {services[e] for e in endpoints if e in services}
     projection, patterns, rows = derivations(dconf.endpoint, text, max_rows, services)
-    record = analyzer.analyse(projection, patterns, rows, known=known if known is not None else set())
-    record["gains"] = gains(dconf, owners, text, patterns, rows, known or set())
+    record = analyzer.analyse(projection, patterns, rows, known)
+    record["gains"] = gains(dconf, publishers, text, patterns, rows, known)
     discovered = [g for g in record["gains"] if not g["known"]]
     best = max(discovered, key=lambda g: g["gain"], default=None)
     record["max_gain"] = best["gain"] if best else 0
@@ -411,14 +405,14 @@ def analyse(dconf, owners, analyzer, text):
 
 
 def build(dconf):
-    owners = load_owners(dconf)
-    analyzer = Analyzer(dconf, owners, read_links(dconf))
-    values = Values(dconf, owners)
+    publishers = load_publishers(dconf)
+    analyzer = Analyzer(dconf, publishers, read_links(dconf))
+    values = Values(dconf, publishers)
     conf = dconf.workload_conf
     outdir = Path(dconf.outdir, "workload")
     shutil.rmtree(outdir, ignore_errors=True)
     records = []
-    services = service_map(owners)
+    services = service_map(publishers)
     for tpl in sorted(Path(conf["templates_dir"]).glob("q*.sparql")):
         query, template = tpl.stem, tpl.read_text()
         meta = template_meta(template)
@@ -431,7 +425,7 @@ def build(dconf):
             text = fill(template, vals)
             record = {"query": query, "instance": kept, "kind": meta["kind"], "values": vals}
             try:
-                result, projection, reachable = analyse(dconf, owners, analyzer, text)
+                result, projection, reachable = analyse(dconf, publishers, analyzer, text)
                 record.update(result)
             except (OverflowError, RuntimeError, ValueError) as e:
                 record.update({"selected": False, "reason": "error", "error": str(e)[:300]})
@@ -459,7 +453,7 @@ def build(dconf):
                 kept += 1
             records.append(record)
         LOGGER.info(f"{query}: kept {kept}/{conf['per_template']} after {tried} candidates")
-    write_sources(dconf, owners)
+    write_sources(dconf, publishers)
     with open(Path(dconf.outdir, "workload-summary.csv"), "w", newline="") as fs:
         writer = csv.DictWriter(fs, fieldnames=FIELDS, extrasaction="ignore")
         writer.writeheader()
@@ -474,7 +468,7 @@ def build(dconf):
 
 
 def check(dconf, text):
-    owners = load_owners(dconf)
-    analyzer = Analyzer(dconf, owners, read_links(dconf))
-    record, _, _ = analyse(dconf, owners, analyzer, text)
+    publishers = load_publishers(dconf)
+    analyzer = Analyzer(dconf, publishers, read_links(dconf))
+    record, _, _ = analyse(dconf, publishers, analyzer, text)
     return record

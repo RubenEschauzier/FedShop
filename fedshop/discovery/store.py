@@ -37,8 +37,7 @@ def isql(dconf, statements, which="main"):
 
 
 def compose(dconf, *args):
-    data_dir = str(Path(dconf.path("data", "x")).parent.resolve())
-    env = {**os.environ, "FEDSHOP_DISCOVERY_DATA": data_dir}
+    env = {**os.environ, "FEDSHOP_DISCOVERY_DATA": str(dconf.dir("data"))}
     subprocess.run(["docker", "compose", "-f", dconf.virtuoso["compose_file"], *args], check=True, env=env)
 
 
@@ -51,19 +50,19 @@ def start(dconf):
         wait_for(f"http://{host}:{http_port}/sparql", timeout=int(dconf.virtuoso["wait_timeout"]))
 
 
-def statements(dconf, owners, which):
+def statements(dconf, publishers, which):
     """The SQL that loads a container's graphs (from /usr/share/proj) and defines its services."""
-    data_dir = Path(dconf.path("data", "x")).parent
-    names = list(owners) if which == "main" else [n for n, i in owners.items() if i["known"]]
-    files = {n: Path(owners[n]["file"]) for n in names if Path(data_dir, owners[n]["file"]).exists()}
-    load = [f"ld_dir('{Path('/usr/share/proj', f.parent)}', '{f.name}', '{owners[n]['storage']}');"
+    data_dir = dconf.dir("data")
+    names = list(publishers) if which == "main" else [n for n, i in publishers.items() if i["known"]]
+    files = {n: Path(publishers[n]["file"]) for n in names if Path(data_dir, publishers[n]["file"]).exists()}
+    load = [f"ld_dir('{Path('/usr/share/proj', f.parent)}', '{f.name}', '{publishers[n]['storage']}');"
             for n, f in files.items()]
     # Queries with VALUES (as engines send for bind joins) run through this view, which the
     # anonymous SPARQL user can't read by default
     services = ['GRANT SELECT ON DB.DBA.SPARQL_SINV_2 TO "SPARQL";',
                 'GRANT EXECUTE ON DB.DBA.SPARQL_SINV_IMP TO "SPARQL";']
     for name in names:
-        info = owners[name]
+        info = publishers[name]
         if info["service"] and (which == "known") == info["known"]:
             port = dconf.internal_port(info["port"])        # the proxy serves the public port
             services += [
@@ -75,49 +74,49 @@ def statements(dconf, owners, which):
     return load + ["rdf_loader_run();"], services
 
 
-def load(dconf, owners):
+def load(dconf, publishers):
     """Recreate both containers from scratch, load the graphs and define the services."""
     compose(dconf, "down", "-v")
     start(dconf)
     for which in ("main", "known"):
-        load_sql, services = statements(dconf, owners, which)
+        load_sql, services = statements(dconf, publishers, which)
         LOGGER.info(f"Loading {len(load_sql) - 1} files into {containers(dconf)[which][0]}...")
         isql(dconf, load_sql, which)
         isql(dconf, services, which)
-    return check(dconf, owners)
+    return check(dconf, publishers)
 
 
-def write_load_scripts(dconf, owners):
+def write_load_scripts(dconf, publishers):
     """virtuoso/<main|known>/load.sql: the same loading as `load`, as a script for the container's
     initdb.d (run once, when the container creates its database), with the data at /usr/share/proj."""
     paths = []
     for which in ("main", "known"):
-        load_sql, services = statements(dconf, owners, which)
+        load_sql, services = statements(dconf, publishers, which)
         path = Path(dconf.path("virtuoso", which, "load.sql"))
         path.write_text("\n".join(load_sql + services + ["checkpoint;"]) + "\n")
         paths.append(str(path))
     return paths
 
 
-def check(dconf, owners):
+def check(dconf, publishers):
     """Triples per graph in both containers against publishers.json, and every service answering for its own graph only."""
-    for which, names in (("main", list(owners)), ("known", [n for n, i in owners.items() if i["known"]])):
+    for which, names in (("main", list(publishers)), ("known", [n for n, i in publishers.items() if i["known"]])):
         container, _, http_port, host = containers(dconf)[which]
         counts = {r["g"]: int(r["n"]) for r in sparql_csv(f"http://{host}:{http_port}/sparql",
                                                           "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g")}
-        wrong = {n: (counts.get(owners[n]["storage"], 0), owners[n]["triples"]) for n in names
-                 if counts.get(owners[n]["storage"], 0) != owners[n]["triples"]}
+        wrong = {n: (counts.get(publishers[n]["storage"], 0), publishers[n]["triples"]) for n in names
+                 if counts.get(publishers[n]["storage"], 0) != publishers[n]["triples"]}
         if wrong:
             raise RuntimeError(f"{container}: graphs disagree with publishers.json (loaded, expected): {dict(list(wrong.items())[:5])}")
         if which == "main":
-            loaded = sum(counts.get(i["storage"], 0) for i in owners.values())
-    for name, info in owners.items():
+            loaded = sum(counts.get(i["storage"], 0) for i in publishers.values())
+    for name, info in publishers.items():
         if info["service"]:
             host, port = containers(dconf)["known" if info["known"] else "main"][3], dconf.internal_port(info["port"])
             internal = f"http://{host}:{port}/{name}/sparql"
             n = int(sparql_csv(internal, "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }", host=f"localhost:{port}")[0]["n"])
             if n != info["triples"]:
                 raise RuntimeError(f"{info['endpoint']} answers {n} triples, {name} holds {info['triples']}")
-    services = sum(i["service"] for i in owners.values())
-    LOGGER.info(f"{len(owners)} graphs loaded ({loaded} triples), {services} services answer for their own graph")
-    return {"graphs": len(owners), "services": services}
+    services = sum(i["service"] for i in publishers.values())
+    LOGGER.info(f"{len(publishers)} graphs loaded ({loaded} triples), {services} services answer for their own graph")
+    return {"graphs": len(publishers), "services": services}

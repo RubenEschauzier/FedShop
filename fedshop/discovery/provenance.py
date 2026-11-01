@@ -6,8 +6,8 @@ pattern. A pattern inside `SERVICE <endpoint> { ... }` is pinned to the graph of
 publisher: a SERVICE clause asks one source what it has. Every other pattern matches any graph, so
 the answer is the query's answer over all published data.
 
-Reachability. Discovery starts at the publishers whose services the query names (or, for a query
-without SERVICE clauses, at the known publishers). In each round the values the query binds lead further:
+Reachability. Discovery starts at the publishers whose services the query names (none, for a query
+without SERVICE clauses). In each round the values the query binds lead further:
 its constants, and the terms of patterns supplied by reached publishers. An IRI leads to the
 storage that serves its document (dereference it; the storage root names the service, if any). A
 brand product leads, through the rdfs:seeAlso links of reached listings and of the brand itself, to
@@ -30,7 +30,8 @@ SKIP = re.compile(r"^\s*(PREFIX|SELECT|WHERE|FILTER|ORDER|LIMIT|OFFSET|#|\}|\{|U
 MODIFIERS = re.compile(r"^\s*(ORDER\s+BY|LIMIT|OFFSET).*$", re.M | re.I)
 
 
-def _expand(term, prefixes):
+def expand(term, prefixes):
+    """A prefixed name as a full IRI; other terms as they are."""
     if term.startswith("<") or term.startswith("?") or term.startswith('"') or term[0].isdigit() or term == "a":
         return term
     if ":" in term:
@@ -40,14 +41,16 @@ def _expand(term, prefixes):
     return term
 
 
-def _count_patterns(query):
-    count = [0]
+def count_patterns(query):
+    """The query's triple patterns, counted by a SPARQL parser (as a check on rewrite's line parsing)."""
+    count = 0
 
     def visit(node):
+        nonlocal count
         if getattr(node, "name", None) == "BGP":
-            count[0] += len(node.triples)
+            count += len(node.triples)
     traverse(translateQuery(parseQuery(re.sub(r"SERVICE\s*<", "GRAPH <", query, flags=re.I))).algebra, visitPre=visit)
-    return count[0]
+    return count
 
 
 def service_endpoints(query):
@@ -55,12 +58,12 @@ def service_endpoints(query):
     return list(dict.fromkeys(re.findall(r"SERVICE\s*<([^>]+)>", query, re.I)))
 
 
-def rewrite(query, keep_projection=False, services=None):
+def rewrite(query, services=None):
     """Wrap each triple pattern of a one-pattern-per-line query in its own GRAPH clause.
 
     A SERVICE block becomes a plain group whose patterns are pinned to the graph services[endpoint]. Returns
-    (query, projection, patterns) where patterns[i] = (s, p, o) for ?g{i+1}. Unless keep_projection,
-    the query selects DISTINCT * without solution modifiers (every derivation).
+    (query, projection, patterns) where patterns[i] = (s, p, o) for ?g{i+1}. The query selects
+    DISTINCT * without solution modifiers (every derivation).
     """
     prefixes = dict(re.findall(r"PREFIX\s+(\w*):\s*<([^>]*)>", query, re.I))
     services = services or {}
@@ -68,13 +71,13 @@ def rewrite(query, keep_projection=False, services=None):
     groups = []   # per open group: the graph a SERVICE block pins its patterns to, or None
 
     def wrap(text):
-        terms = [_expand(t, prefixes) for t in TERM.findall(text.strip().rstrip(".").strip())]
+        terms = [expand(t, prefixes) for t in TERM.findall(text.strip().rstrip(".").strip())]
         if len(terms) != 3:
             raise ValueError(f"Cannot parse triple pattern: {text!r}")
         patterns.append(tuple(terms))
         g = f"?g{len(patterns)}"
         block = f"GRAPH {g} {{ {' '.join(terms)} . }}"
-        pinned = next((ns for ns in reversed(groups) if ns), None)
+        pinned = next((graph for graph in reversed(groups) if graph), None)
         if pinned:
             return f"{{ {block} FILTER ({g} = <{pinned}>) }}"
         return block
@@ -103,15 +106,14 @@ def rewrite(query, keep_projection=False, services=None):
         else:
             out.append(line)
 
-    expected = _count_patterns(query)
+    expected = count_patterns(query)
     if expected != len(patterns):
         raise ValueError(f"Rewrote {len(patterns)} triple patterns but the query has {expected}")
 
     q = "\n".join(out)
     projection = re.search(r"SELECT\s+(?:DISTINCT\s+|REDUCED\s+)?(.*?)\s+WHERE", q, re.S | re.I).group(1).split()
-    if not keep_projection:
-        q = re.sub(r"SELECT\s+(?:DISTINCT\s+|REDUCED\s+)?.*?\s+WHERE", "SELECT DISTINCT * WHERE", q, count=1, flags=re.S | re.I)
-        q = MODIFIERS.sub("", q)
+    q = re.sub(r"SELECT\s+(?:DISTINCT\s+|REDUCED\s+)?.*?\s+WHERE", "SELECT DISTINCT * WHERE", q, count=1, flags=re.S | re.I)
+    q = MODIFIERS.sub("", q)
     return q, [v.lstrip("?") for v in projection], patterns
 
 
@@ -127,20 +129,18 @@ def derivations(endpoint, query, max_rows, services=None):
 class Analyzer:
     """Reachability and categories over the publishers, given the links between listings."""
 
-    def __init__(self, dconf, owners, links):
+    def __init__(self, dconf, publishers, links):
         self.base = dconf.base
-        self.owners = owners
-        self.ns = {n: i["storage"] for n, i in owners.items()}
-        self.known = {i["storage"] for i in owners.values() if i["known"]}
-        self.discovered = {i["storage"] for i in owners.values() if not i["known"]}
-        self.reviewers = {i["storage"] for i in owners.values() if i["kind"] == "reviewer"}
-        self.brands = {i["storage"] for i in owners.values() if i["kind"] == "producer"}
-        self.lookup_only = {i["storage"] for i in owners.values() if not i["service"]}
+        self.ns = {n: i["storage"] for n, i in publishers.items()}
+        self.known = self.discovered = set()               # per query, set by analyse
+        self.reviewers = {i["storage"] for i in publishers.values() if i["kind"] == "reviewer"}
+        self.brands = {i["storage"] for i in publishers.values() if i["kind"] == "producer"}
+        self.lookup_only = {i["storage"] for i in publishers.values() if not i["service"]}
         self.adj = defaultdict(lambda: defaultdict(set))   # product -> publisher storage -> peer storages
         self.holders = defaultdict(set)                     # product -> publishers with a listing, and its brand
-        for product, owner, _, peer, _ in links:
-            self.adj[product][self.ns[owner]].add(self.ns[peer])
-            self.holders[product] |= {self.ns[owner], self.ns[peer]}
+        for product, publisher, _, peer, _ in links:
+            self.adj[product][self.ns[publisher]].add(self.ns[peer])
+            self.holders[product] |= {self.ns[publisher], self.ns[peer]}
         # A type leads to the brands with a category page for it (the taxonomy's seeAlso links).
         categories = Path(dconf.path("categories.json"))
         self.categories = ({t: {self.ns[b] for b in brands} for t, brands in json.loads(categories.read_text()).items()}
@@ -187,11 +187,10 @@ class Analyzer:
             reached |= new
             rounds += 1
 
-    def analyse(self, projection, patterns, rows, known=None):
+    def analyse(self, projection, patterns, rows, known):
         """known: the storages of the publishers the query names in SERVICE clauses. They are where
-        discovery starts and everything else counts as discovered. Without it, the known publishers are."""
-        known_publishers = {i["storage"] for i in self.owners.values() if i["known"]}
-        self.known = known_publishers if known is None else set(known)
+        discovery starts and everything else counts as discovered."""
+        self.known = set(known)
         self.discovered = set(self.ns.values()) - self.known
         solutions = defaultdict(list)
         for row in rows:
@@ -256,7 +255,7 @@ class Analyzer:
             "reachable_needing_discovery": stats["reachable_needing_discovery"],
             "reachable_mixed": stats["reachable_mixed"],
             "storages_in_answer": short(storages),
-            "known": short(self.known) if known is not None else [],
+            "known": short(self.known),
             "discovered_in_answer": len(storages - self.known),
             "storages_needed": short(needed),
             "brands_needed": len(needed & self.brands),

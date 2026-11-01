@@ -63,8 +63,6 @@ DIRECTIONS = {  # (from kind, to kind) -> links setting
     ("ratingsite", "vendor"): "where_to_buy",
     ("ratingsite", "ratingsite"): "also_reviewed",
 }
-
-
 XSD = "http://www.w3.org/2001/XMLSchema#"
 DATE_ONLY = re.compile(r'^"(\d{4}-\d{2}-\d{2})"\^\^<' + re.escape(XSD) + r'dateTime>$')
 DOUBLE = re.compile(r'^"([^"]*)"\^\^<' + re.escape(XSD) + r'double>$')
@@ -117,16 +115,18 @@ def choose_known(dconf, names):
     return sorted(chosen, key=lambda n: (kind_of(n), number(n)))
 
 
-class Ownership:
+class Publishing:
+    """FedShop's catalog and members, restructured into publishers: build() fills every publisher's
+    triples, the links and the placements, and returns publishers.json."""
 
     def __init__(self, dconf):
         self.dconf = dconf
         self.catalog = Catalog(dconf)
         self.members = sorted(dconf.member_names, key=lambda n: (kind_of(n), number(n)))  # vendorN, ratingsiteN
-        self.data = defaultdict(list)          # owner -> N-Triples lines
+        self.data = defaultdict(list)          # publisher -> N-Triples lines
         self.placements = []                   # N-Quads lines: a triple and the document it is also placed in
         self.categories = defaultdict(set)     # type IRI -> brands with a category page for it
-        self.listings = defaultdict(dict)      # product number -> {owner: listing IRI}
+        self.listings = defaultdict(dict)      # product number -> {publisher: listing IRI}
         self.countries = set()
         self.reviewer_iri = {}                 # (site, local Person name) -> reviewer IRI
         self.reviewers = []
@@ -169,7 +169,7 @@ class Ownership:
             return f"<{self.map_iri(term[1:-1])}>"
         return canonical_literal(term)
 
-    # ----- owners' data -----
+    # ----- publishers' data -----
     def build_reviewers(self):
         """Number the reviewers by review site, then by person, as FedShop numbers them."""
         for site in (m for m in self.members if kind_of(m) == "ratingsite"):
@@ -181,7 +181,7 @@ class Ownership:
                 self.reviewers.append(name)
 
     def read(self, member):
-        return read_nquads(Path(self.dconf.dataset_dir, f"{member}.nq"))
+        return read_nquads(Path(self.dconf.members_dir, f"{member}.nq"))
 
     def build_members(self):
         for member in self.members:
@@ -192,9 +192,9 @@ class Ownership:
                 if kind == "Product":
                     if p == f"<{OWL_SAMEAS}>":
                         copies[s] = int(GLOBAL.match(o[1:-1][len(BSBM):]).group(2))
-                    continue                                   # the brand owns the specification
+                    continue                                   # the brand publishes the specification
                 if kind in ("ProductType", "ProductFeature", "Producer"):
-                    continue                                   # the taxonomy and the brands own these
+                    continue                                   # the taxonomy and the brands publish these
                 if kind == "Person":
                     if p == f"<{DC_PUBLISHER}>":
                         continue
@@ -220,7 +220,7 @@ class Ownership:
         """The brand's triples for product n."""
         out = []
         for s, p, o in self.catalog.product(n):
-            if p in (f"<{OWL_SAMEAS}>",):
+            if p == f"<{OWL_SAMEAS}>":
                 continue
             if p == f"<{BSBM}producer>":
                 o = f"<{self.producer_iri(self.catalog.brand_of[n])}>"
@@ -273,14 +273,14 @@ class Ownership:
                 peers = sorted((m for m in holders if kind_of(m) == dst), key=number)
                 for peer in sample(key, n, peers):
                     links.append((product, brand, product, peer, holders[peer]))
-        for product, owner, source, peer, target in links:
-            self.data[owner].append(nt(f"<{source}>", f"<{SEEALSO}>", f"<{target}>"))
+        for product, publisher, source, peer, target in links:
+            self.data[publisher].append(nt(f"<{source}>", f"<{SEEALSO}>", f"<{target}>"))
         self.links = links
 
     def build_placements(self):
         """Triples also placed in another document of their publisher: copies for traversal."""
-        def place(line, doc):
-            self.placements.append(f"{line[:-3]} <{doc}> .\n")
+        def place(line, document):
+            self.placements.append(f"{line[:-3]} <{document}> .\n")
 
         backlinks = (f"<{BSBM}product>", f"<{BSBM}reviewFor>")
         for member in self.members:
@@ -306,21 +306,22 @@ class Ownership:
         """A brand's page listing its products of a type: <brand>/types/ProductTypeN (a document)."""
         return f"{self.dconf.ns(brand)}types/{doc(type_iri)[len(self.dconf.ns('taxonomy')):]}"
 
-    # ----- owners -----
-    def owners(self):
+    # ----- publishers.json -----
+    def publishers(self):
+        """Every publisher: kind, known or not, service, storage, graph file, triples, port and endpoint."""
         dconf = self.dconf
         known = set(choose_known(dconf, self.members))
-        owners = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
+        publishers = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
         for m in self.members:
-            owners[m] = {"kind": kind_of(m), "known": m in known, "service": True}
+            publishers[m] = {"kind": kind_of(m), "known": m in known, "service": True}
         for brand in range(self.catalog.count):
-            owners[self.brand_name(brand)] = {"kind": "producer", "known": False,
+            publishers[self.brand_name(brand)] = {"kind": "producer", "known": False,
                                               "service": brand in self.catalog.services,
                                               "products": self.catalog.sizes[brand]}
         for r in self.reviewers:
-            owners[r] = {"kind": "reviewer", "known": False, "service": False}
+            publishers[r] = {"kind": "reviewer", "known": False, "service": False}
         port = int(dconf.virtuoso["first_service_port"])
-        for name, info in owners.items():
+        for name, info in publishers.items():
             info["storage"] = dconf.ns(name)
             info["file"] = graph_file(name, info)
             info["triples"] = len(self.data[name])
@@ -328,7 +329,7 @@ class Ownership:
                 info["port"] = port
                 info["endpoint"] = f"http://{dconf.public_host}:{port}/{name}/sparql"
                 port += 1
-        return owners
+        return publishers
 
     def build(self):
         self.build_reviewers()
@@ -338,22 +339,21 @@ class Ownership:
         self.build_taxonomy()
         self.build_links()
         self.build_placements()
-        return self.owners()
+        return self.publishers()
 
 
-def write(dconf, own, owners):
-    data_dir = Path(dconf.path("data", "x")).parent
-    for old in data_dir.rglob("*.nt"):
+def write(dconf, pub, publishers):
+    for old in dconf.dir("data").rglob("*.nt"):
         old.unlink()
-    for name, info in owners.items():
-        Path(dconf.data_file(name, info)).write_text("".join(sorted(set(own.data[name]))))
-    Path(dconf.path("publishers.json")).write_text(json.dumps(owners, indent=2))
-    Path(dconf.path("placements.nq")).write_text("".join(sorted(set(own.placements))))
-    Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(own.categories.items())}, indent=1))
+    for name, info in publishers.items():
+        Path(dconf.data_file(name, info)).write_text("".join(sorted(set(pub.data[name]))))
+    Path(dconf.path("publishers.json")).write_text(json.dumps(publishers, indent=2))
+    Path(dconf.path("placements.nq")).write_text("".join(sorted(set(pub.placements))))
+    Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(pub.categories.items())}, indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
         writer = csv.writer(fs, delimiter="\t")
         writer.writerow(["product", "publisher", "from", "peer", "to"])
-        writer.writerows(own.links)
+        writer.writerows(pub.links)
 
 
 def read_links(dconf):
@@ -362,18 +362,18 @@ def read_links(dconf):
 
 
 def run(dconf):
-    own = Ownership(dconf)
-    owners = own.build()
-    write(dconf, own, owners)
+    pub = Publishing(dconf)
+    publishers = pub.build()
+    write(dconf, pub, publishers)
     kinds = defaultdict(lambda: defaultdict(int))
-    for info in owners.values():
+    for info in publishers.values():
         k = kinds[info["kind"]]
-        k["owners"] += 1
+        k["publishers"] += 1
         k["known"] += info["known"]
         k["services"] += info["service"]
         k["triples"] += info["triples"]
-    summary = {"owners": {k: dict(v) for k, v in kinds.items()},
-               "listings": sum(len(h) for h in own.listings.values()), "listed_products": len(own.listings),
-               "links": len(own.links), "placed_triples": len(own.placements), "category_pages": sum(len(b) for b in own.categories.values())}
+    summary = {"publishers": {k: dict(v) for k, v in kinds.items()},
+               "listings": sum(len(h) for h in pub.listings.values()), "listed_products": len(pub.listings),
+               "links": len(pub.links), "placed_triples": len(pub.placements), "category_pages": sum(len(b) for b in pub.categories.values())}
     LOGGER.info(json.dumps(summary))
     return summary

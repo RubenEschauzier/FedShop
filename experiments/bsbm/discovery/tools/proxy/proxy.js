@@ -3,17 +3,17 @@
 //
 // Usage: node proxy.js <map.json> [request-log.jsonl]
 //
-// map.json (written by `fedshop-discovery serve`):
-//   documents: {port, target, host?}             public port of the Solid server, and the port (and
-//                                                host, default localhost) it listens on
-//   services: [{port, target, host?, publisher}]  one per query service
-//   publishers: {name: {kind, known}}      every publisher, and whether it is known up front
-//   control_port, max_inflight            control API; most requests in flight to Virtuoso at once
+// map.json (written by `fedshop-discovery serve`, or from serving.json by the jbr experiment):
+//   documents: {port, target, host?}               public port of the Solid server, and the port (and
+//                                                  host, default localhost) it listens on
+//   services: [{port, target, host?, publisher}]   one per query service
+//   publishers: {name: {kind, known}}              every publisher, and whether it is known up front
+//   control_port, max_inflight                     control API; most requests in flight to Virtuoso at once
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
 //
 // Every request is counted by source and by kind:
-//   source: "known" (a publisher in the known set: by default the known publishers), "discovered" (any other
-//           publisher) or "other" (no publisher: the server root, unknown paths)
+//   source: "known" (a publisher in the known set: by default the known publishers), "discovered"
+//           (any other publisher) or "other" (no publisher: the server root, unknown paths)
 //   kind:   "document", "storage-root" (/<publisher>/), "container" (another path ending in /),
 //           "server-root" (/) or "sparql" (a query service)
 //
@@ -30,18 +30,18 @@
 // Control API on control_port:
 //   GET  /stats            the counts and resources since the last reset (?samples=1 adds every sample)
 //   GET  /health           200 when the Solid server and one service on every Virtuoso host answer, else 503
-//   POST /reset            zero both; optional JSON body {"label": "q07-2", "known": ["vendor13", "taxonomy"]}
+//   POST /reset            zero the counts and resources; optional JSON body {"label": "q07-2", "known": ["vendor13", "taxonomy"]}
 //                          sets the label written to the request log and the publishers counted as
 //                          known (default: the known publishers)
 "use strict";
 const fs = require("fs");
 const http = require("http");
+const { performance } = require("perf_hooks");
 
 const map = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const log = process.argv[3] ? fs.createWriteStream(process.argv[3], { flags: "a" }) : null;
 const knownPublishers = Object.keys(map.publishers).filter((name) => map.publishers[name].known);
 const KINDS = ["document", "storage-root", "container", "server-root", "sparql"];
-const { performance } = require("perf_hooks");
 
 let label = null;
 let known = new Set(knownPublishers);
@@ -291,7 +291,7 @@ http.createServer((req, res) => {
     });
     return;
   }
-  reply(404, { error: "Use GET /stats or POST /reset" });
+  reply(404, { error: "Use GET /stats, GET /health or POST /reset" });
 }).listen(map.control_port);
 
 console.log(`Proxy: documents on :${map.documents.port}, ${map.services.length} services, control on :${map.control_port}`);

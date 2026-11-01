@@ -13,9 +13,8 @@ from pathlib import Path
 
 
 def command(dconf, log_level="warn"):
-    server = Path(dconf.discovery_dir, "tools", "css", "node_modules", "@solid", "community-server", "bin", "server.js")
-    web_dir = Path(dconf.path("web", "x")).parent.resolve()
-    return ["node", str(server.resolve()), "-c", str(Path(dconf.css["config"]).resolve()), "-f", str(web_dir),
+    server = dconf.tool("css", "node_modules", "@solid", "community-server", "bin", "server.js")
+    return ["node", server, "-c", str(Path(dconf.css["config"]).resolve()), "-f", str(dconf.dir("web")),
             "-p", str(dconf.internal_port(dconf.css["port"])), "-b", dconf.base, "-l", log_level]
 
 
@@ -27,7 +26,7 @@ def cgroup(container):
     return f"/sys/fs/cgroup{path}"
 
 
-def proxy_map(dconf, owners, documents_host="localhost"):
+def proxy_map(dconf, publishers, documents_host="localhost"):
     """The proxy's ports, publishers and upstream hosts, without the components it measures."""
     v = dconf.virtuoso
     return {
@@ -35,30 +34,30 @@ def proxy_map(dconf, owners, documents_host="localhost"):
                       "host": documents_host},
         "services": [{"port": i["port"], "target": dconf.internal_port(i["port"]), "publisher": n,
                       "host": v["known_host"] if i["known"] else v["host"]}
-                     for n, i in owners.items() if i["service"]],
-        "publishers": {n: {"kind": i["kind"], "known": i["known"]} for n, i in owners.items()},
+                     for n, i in publishers.items() if i["service"]],
+        "publishers": {n: {"kind": i["kind"], "known": i["known"]} for n, i in publishers.items()},
         "control_port": int(dconf.proxy["control_port"]),
         "max_inflight": int(dconf.proxy["max_inflight"]),
         "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": []},
     }
 
 
-def serving_plan(dconf, owners, documents_host):
+def serving_plan(dconf, publishers, documents_host):
     """What it takes to serve the benchmark elsewhere (jbr): the Solid server's command and the proxy's
     map. Paths are absolute, as seen in the environment this runs in (the generator image)."""
     return {
         "base_url": dconf.base,
         "proxy_host": dconf.public_host,
         "css_command": command(dconf),
-        "web_dir": str(Path(dconf.path("web", "x")).parent.resolve()),
-        "proxy_script": str(Path(dconf.discovery_dir, "tools", "proxy", "proxy.js").resolve()),
-        "proxy_map": proxy_map(dconf, owners, documents_host),
+        "web_dir": str(dconf.dir("web")),
+        "proxy_script": dconf.tool("proxy", "proxy.js"),
+        "proxy_map": proxy_map(dconf, publishers, documents_host),
     }
 
 
-def write_proxy_map(dconf, owners, css_pid):
+def write_proxy_map(dconf, publishers, css_pid):
     """The proxy's ports, publishers and the components it measures (proxy.json)."""
-    plan = proxy_map(dconf, owners)
+    plan = proxy_map(dconf, publishers)
     plan["monitor"]["components"] = [
         {"name": "css", "pid": css_pid},
         {"name": "known_endpoints", "cgroup": cgroup(dconf.virtuoso["known_container"])},
@@ -69,13 +68,12 @@ def write_proxy_map(dconf, owners, css_pid):
     return path
 
 
-def serve(dconf, owners, log_level="warn", request_log=None):
+def serve(dconf, publishers, log_level="warn", request_log=None):
     """Run CSS and the proxy in the foreground until interrupted."""
     css = subprocess.Popen(command(dconf, log_level))
     proxy = None
     try:
-        script = Path(dconf.discovery_dir, "tools", "proxy", "proxy.js").resolve()
-        args = ["node", str(script), write_proxy_map(dconf, owners, css.pid)]
+        args = ["node", dconf.tool("proxy", "proxy.js"), write_proxy_map(dconf, publishers, css.pid)]
         proxy = subprocess.Popen(args + ([str(Path(request_log).resolve())] if request_log else []))
         if css.wait() != 0:
             raise RuntimeError(f"The Solid server stopped with exit code {css.returncode}")

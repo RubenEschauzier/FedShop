@@ -134,19 +134,19 @@ evaluation:
 
 # Discovery-based variant (fedshop-discovery, see experiments/bsbm/discovery/README.md)
 discovery:
-  base_url: "http://localhost:3000/"   # every owner's namespace is <base_url><owner>/ (served by CSS)
+  base_url: "http://localhost:3000/"   # every publisher's storage is <base_url><publisher>/ (served by CSS)
   known:                         # shops and review sites known up front, where the engine starts (the taxonomy always is)
     ratio: 0.5                   # stratified over shops and review sites
     seed: 42
-  members:                       # shops and review sites, generated with FedShop's templates against the brand catalog
+  members:                       # shops and review sites, generated with FedShop's templates against the product catalog
     shops: 20                    # FedShop's batch 1 size; the rates below are FedShop's full ones
     review_sites: 20
     pool: 20000                  # products shops and review sites deal in: about 1 offer and 5 reviews per product
     offers: 2000                 # FedShop's average offers per shop (normal_dist avg)
     reviews: 10000               # FedShop's average reviews per review site; reviewers = reviews / 20
     seed: 42
-  brands:                        # producers own their products; never known, always discovered
-    products: 200000             # products in all brand catalogs together (more than members.pool)
+  brands:                        # producers publish their products; never known, always discovered
+    products: 200000             # products in the catalog, over all brands (more than members.pool)
     count: 400
     zipf: 0.8                    # brand size ~ rank^-zipf: a few big brands, a moderate long tail
     min_products: 20
@@ -159,7 +159,7 @@ discovery:
     brand_where_to_buy: 2        # brand product -> shop listings
     brand_reviews: all           # brand product -> review site pages: every page that reviews it ("reviewed at")
     seed: 42
-  virtuoso:                      # one container for every owner's query service, next to FedShop's own containers
+  virtuoso:                      # two containers for the query services, next to FedShop's own containers
     compose_file: "${generation.workdir}/discovery/docker/virtuoso.yml"
     container: fedshop-discovery-virtuoso
     isql_port: 1112

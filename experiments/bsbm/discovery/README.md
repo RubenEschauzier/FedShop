@@ -21,7 +21,7 @@ An entity's IRI is the URL of its document plus `#it`: the offer `vendor13/Offer
 ## Data model
 
 - **Generation.** Everything comes from FedShop's own WatDiv templates, run by the benchmark into its own folder; FedShop's datasets are not used or changed.
-  - **Brand catalogs:** FedShop's product template for `brands.products` products (200,000 full, 20,000 small) and `brands.count` producers. Numbers of types and features follow from the catalog size by FedShop's formulas.
+  - **Product catalog:** FedShop's product template for `brands.products` products (200,000 full, 20,000 small) and `brands.count` producers. Numbers of types and features follow from the catalog size by FedShop's formulas.
   - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded.
 - **Brands.** A brand's product `producer22/Product77` carries the full BSBM specification: label, comment, types, features, numeric and textual properties, producer. Brand sizes follow rank^-`zipf` (0.8) with at least `min_products`: in the full config 16,676 products for the largest brand and 136 for the smallest, and the 100 brands with a service hold 67% of all products.
 - **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/Product77>`. Offers and reviews point to the listing, as in FedShop.
@@ -160,7 +160,7 @@ scripts/build-watdiv.sh
 **Generation**, with the full config (for development, use `experiments/bsbm/snakefile/config_small.yaml` instead):
 
 ```bash
-# 1. Brand catalogs: FedShop's product template, once (--force regenerates) -> catalog/
+# 1. Product catalog: FedShop's product template, once (--force regenerates) -> catalog/
 uv run fedshop-discovery catalog experiments/bsbm/snakefile/config.yaml
 
 # 2. Shops and review sites: FedShop's vendor and rating-site templates, one run per member;
@@ -169,7 +169,7 @@ uv run fedshop-discovery members experiments/bsbm/snakefile/config.yaml
 
 # 3. Publishers: FedShop's data restructured into publishers, links, placements, categories
 #    -> data/known/, data/discoverable/, publishers.json, links.tsv, placements.nq, categories.json
-uv run fedshop-discovery own experiments/bsbm/snakefile/config.yaml
+uv run fedshop-discovery publish experiments/bsbm/snakefile/config.yaml
 
 # 4. Query services: (re)create the Virtuoso container from data/ (needs Docker)
 uv run fedshop-discovery load experiments/bsbm/snakefile/config.yaml
@@ -177,12 +177,9 @@ uv run fedshop-discovery load experiments/bsbm/snakefile/config.yaml
 # 5. Documents: rdf-dataset-fragmenter, plus the storage roots' metadata -> web/
 uv run fedshop-discovery fragment experiments/bsbm/snakefile/config.yaml
 
-# 6. Workload: instantiate the templates, analyse and select the instances (starts Virtuoso)
-#    -> workload/, workload-summary.csv, sources/
+# 6. Workload: instantiate the templates, analyse and select the instances, each with its plain
+#    form (starts Virtuoso) -> workload/, workload-summary.csv, sources/
 uv run fedshop-discovery build-workload experiments/bsbm/snakefile/config.yaml
-
-# 7. Plain forms of every instance (starts Virtuoso) -> workload/*/instance_*/plain*.{sparql,csv}
-uv run fedshop-discovery plain experiments/bsbm/snakefile/config.yaml
 ```
 
 **Serving** the documents and services behind the counting proxy (keeps running; starts the Virtuoso container if needed):
@@ -197,42 +194,42 @@ uv run fedshop-discovery serve experiments/bsbm/snakefile/config.yaml --log-leve
 
 ### Parameters
 
-Every parameter comes from the config's `discovery` section. These are the values that give the benchmark described here; a key left out of the config falls back to `DEFAULTS` in `fedshop/discovery/common.py`, which are the full values. Steps 6 and 7 also need the Virtuoso ports of step 4.
+Every parameter comes from the config's `discovery` section. These are the values that give the benchmark described here; a key left out of the config falls back to `DEFAULTS` in `fedshop/discovery/common.py`, which are the full values. Step 6 also needs the Virtuoso ports of step 4.
 
 | Key | Full | Small | Read by | Meaning |
 |---|---|---|---|---|
 | `workdir` | `benchmark/discovery` | `benchmark/discovery-small` | all | outputs, under `experiments/bsbm/` |
-| `base_url` | `http://localhost:3000/` | same | own, fragment, build-workload, plain, serve | storage root of each publisher: `<base_url><publisher>/` |
-| `brands.products` | 200,000 | 20,000 | catalog, own | products in all brand catalogs together |
-| `brands.count` | 400 | 40 | catalog, own | brands (FedShop's `producer_n`) |
-| `brands.zipf` | 0.8 | same | own | brand size ∝ rank^-zipf |
-| `brands.min_products` | 20 | same | own | products of the smallest brand |
-| `brands.service_share` | 0.25 | same | own | share of brands, largest first, with a service |
-| `brands.seed` | 42 | same | own | product → brand assignment |
-| `members.shops` | 20 | 20 | members, own | shops (`vendor0`…) |
-| `members.review_sites` | 20 | 20 | members, own | review sites (`ratingsite0`…) |
-| `members.pool` | 20,000 | 200 | members, own | the catalog's first products, which members deal in |
+| `base_url` | `http://localhost:3000/` | same | publish, fragment, build-workload, serve | storage root of each publisher: `<base_url><publisher>/` |
+| `brands.products` | 200,000 | 20,000 | catalog, publish | products in the catalog, over all brands |
+| `brands.count` | 400 | 40 | catalog, publish | brands (FedShop's `producer_n`) |
+| `brands.zipf` | 0.8 | same | publish | brand size ∝ rank^-zipf |
+| `brands.min_products` | 20 | same | publish | products of the smallest brand |
+| `brands.service_share` | 0.25 | same | publish | share of brands, largest first, with a service |
+| `brands.seed` | 42 | same | publish | product → brand assignment |
+| `members.shops` | 20 | 20 | members, publish | shops (`vendor0`…) |
+| `members.review_sites` | 20 | 20 | members, publish | review sites (`ratingsite0`…) |
+| `members.pool` | 20,000 | 200 | members, publish | the catalog's first products, which members deal in |
 | `members.offers` | 2,000 | 20 | members | average offers per shop (`normal_dist(3, 1, avg)`) |
 | `members.reviews` | 10,000 | 100 | members | average reviews per review site; reviewers per site = reviews / 20 |
 | `members.seed` | 42 | same | members | each member's offer or review count |
-| `known.ratio` | 0.5 | same | own | share of shops and of review sites known up front |
-| `known.members` | – (drawn) | same | own | an explicit list of known shops and review sites instead of drawing them |
-| `known.seed` | 42 | same | own | which shops and review sites are known |
-| `links.reviews` | 2 | same | own | shop listing → review pages |
-| `links.where_to_buy` | 3 | same | own | review page → shop listings |
-| `links.also_reviewed` | 0 | same | own | review page → other review pages |
-| `links.brand_where_to_buy` | 2 | same | own | brand product → shop listings |
-| `links.brand_reviews` | `all` | same | own | brand product → review pages |
-| `links.seed` | 42 | same | own | peers per listing |
+| `known.ratio` | 0.5 | same | publish | share of shops and of review sites known up front |
+| `known.members` | – (drawn) | same | publish | an explicit list of known shops and review sites instead of drawing them |
+| `known.seed` | 42 | same | publish | which shops and review sites are known |
+| `links.reviews` | 2 | same | publish | shop listing → review pages |
+| `links.where_to_buy` | 3 | same | publish | review page → shop listings |
+| `links.also_reviewed` | 0 | same | publish | review page → other review pages |
+| `links.brand_where_to_buy` | 2 | same | publish | brand product → shop listings |
+| `links.brand_reviews` | `all` | same | publish | brand product → review pages |
+| `links.seed` | 42 | same | publish | peers per listing |
 | `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
 | `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load, serve | every graph (analysis) and the discovered services |
-| `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, plain, check | |
+| `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, check | |
 | `virtuoso.known_container` | `fedshop-discovery-virtuoso-known` | same | load, serve | the known publishers' graphs and services |
 | `virtuoso.known_isql_port` / `known_http_port` | 1113 / 8892 | same | load, check | |
-| `virtuoso.external` | false | same | load, build-workload, plain, check | the containers are run by someone else (jbr): steps only wait for them |
-| `virtuoso.host` / `known_host` | `localhost` / `localhost` | same | build-workload, plain, check, serve | where the containers are reached |
+| `virtuoso.external` | false | same | load, build-workload, check | the containers are run by someone else (jbr): steps only wait for them |
+| `virtuoso.host` / `known_host` | `localhost` / `localhost` | same | build-workload, check, serve | where the containers are reached |
 | `virtuoso.wait_timeout` | 600 | same | steps that start Virtuoso | seconds to wait for the containers |
-| `virtuoso.first_service_port` | 34300 | same | own, load, serve | public port of the first query service; the rest follow |
+| `virtuoso.first_service_port` | 34300 | same | publish, load, serve | public port of the first query service; the rest follow |
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
 | `proxy.port_offset` | 10000 | same | load, serve | the Solid server and the services listen on their public port + this |
 | `proxy.control_port` | 3999 | same | serve | `GET /stats`, `POST /reset` |
@@ -248,7 +245,7 @@ The WatDiv runs (steps 1–2) also read FedShop's `generation.schema.{product,ve
 
 | | Full config | Small config |
 |---|---|---|
-| Time | ≈30 min (catalog and members 5, own 2, load 2, fragment 15, workload 3) | ≈1 min |
+| Time | ≈30 min (catalog and members 5, publish 2, load 2, fragment 15, workload 3) | ≈1 min |
 | Disk | ≈10.6 GB (catalog 2.5, members 2.1, data 1.5, placements 0.45, documents 4.0, plus Virtuoso) | ≈0.7 GB |
 | Triples / documents / services | 8,758,874 / 759,900 (280,923 of them category pages) / 141 | not rebuilt yet |
 
@@ -264,9 +261,9 @@ docker build -f experiments/bsbm/discovery/docker/Dockerfile-generator -t <regis
 
 Every step runs in containers on one Docker network:
 
-- **Data and documents:** `catalog`, `members`, `own`, `fragment`, and `load-scripts`, which writes the loading of both Virtuoso containers as `initdb.d` scripts (`virtuoso/<main|known>/load.sql`) instead of loading them with `docker exec`.
+- **Data and documents:** `catalog`, `members`, `publish`, `fragment`, and `load-scripts`, which writes the loading of both Virtuoso containers as `initdb.d` scripts (`virtuoso/<main|known>/load.sql`) instead of loading them with `docker exec`.
 - **Query services:** both Virtuoso containers load their graphs on first start, from those scripts.
-- **Workload:** `build-workload` and `plain` with `virtuoso.external`, against the containers by name, and `serving-plan`, which writes `serving.json`: the Solid server's command and the proxy's map, so the experiment serves the benchmark without reading the config itself.
+- **Workload:** `build-workload` with `virtuoso.external`, against the containers by name, and `serving-plan`, which writes `serving.json`: the Solid server's command and the proxy's map, so the experiment serves the benchmark without reading the config itself.
 
 `base_url` names the proxy's container (`http://fedshop-proxy:3000/`), so the IRIs, the storage roots' service links and the queries' `SERVICE` clauses all resolve to the proxy on that network. See the package's README for its parameters and outputs.
 
@@ -303,7 +300,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **One description instead of copies.** FedShop gives every shop and review site a full copy of each product, producer, feature and type, linked to a global IRI with `owl:sameAs`. Here each is described once, products by their brand and types and features by the taxonomy; members keep only a listing with `fs:listingOf`. In the small config, for FedShop's 200 products and what they use, 70,069 copied triples became 8,752.
 - **New members.** Brands (400) and a taxonomy, which FedShop doesn't have as members. Reviewers become members of their own.
 - **Own generation.** The benchmark runs FedShop's templates itself, with seeded offer and review counts. Shops and review sites have FedShop's full per-member rates, but there are 20 of each (FedShop's batch 1) instead of FedShop's 100.
-- **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands own 200,000 products, most of them sold nowhere.
+- **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands publish 200,000 products, most of them sold nowhere.
 - **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment.
 - **Links and category pages are new.** FedShop has no links between members and no documents.
 - **IRIs.** All IRIs move under `http://localhost:3000/<publisher>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy.
