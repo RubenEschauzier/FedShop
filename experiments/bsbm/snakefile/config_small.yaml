@@ -174,7 +174,7 @@ discovery:
   proxy:                         # counting proxy on the public ports (css.port, the service ports); engines only see it
     port_offset: 10000           # the Solid server and Virtuoso's services listen on their public port + this
     control_port: 3999           # GET /stats, POST /reset
-    max_inflight: 48             # requests to Virtuoso at once; the rest wait in the proxy
+    max_inflight: 48             # requests to each Virtuoso container at once; the rest wait in the proxy
     sample_ms: 50                # CPU and memory sampling interval for min/max (totals are exact)
   workload:
     per_template: 5

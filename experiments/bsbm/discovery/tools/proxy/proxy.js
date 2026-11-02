@@ -8,7 +8,7 @@
 //                                                  host, default localhost) it listens on
 //   services: [{port, target, host?, publisher}]   one per query service
 //   publishers: {name: {kind, known}}              every publisher, and whether it is known up front
-//   control_port, max_inflight                     control API; most requests in flight to Virtuoso at once
+//   control_port, max_inflight                     control API; most requests in flight to each Virtuoso container at once
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
 //
 // Every request is counted by source and by kind:
@@ -49,13 +49,16 @@ let stats;
 
 function counter() {
   const c = { requests: 0, bytes: 0, errors: 0 };
-  for (const kind of KINDS) c[kind] = 0;
+  for (const kind of KINDS){
+    c[kind] = 0;
+  }
   return c;
 }
 
-// ----- resources -----
+// Reads docker cgroup for resource usage
 function readCgroup(dir) {
   const cpu = Number(/usage_usec (\d+)/.exec(fs.readFileSync(`${dir}/cpu.stat`, "utf8"))[1]) / 1e6;
+  // Memory usage is given as total - inactive as os keeps previously accessed ram in memory as 'cache'
   const current = Number(fs.readFileSync(`${dir}/memory.current`, "utf8"));
   const inactive = /^inactive_file (\d+)$/m.exec(fs.readFileSync(`${dir}/memory.stat`, "utf8"));
   return { cpu, memory: current - (inactive ? Number(inactive[1]) : 0) };
@@ -64,7 +67,11 @@ function readCgroup(dir) {
 function readProcess(pid) {
   let cpu = 0;
   for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
-    try { cpu += Number(fs.readFileSync(`/proc/${pid}/task/${tid}/schedstat`, "utf8").split(" ")[0]) / 1e9; } catch (e) { /* thread ended */ }
+    try { 
+      cpu += Number(fs.readFileSync(`/proc/${pid}/task/${tid}/schedstat`, "utf8").split(" ")[0]) / 1e9; 
+    } catch (e) { 
+      /* thread ended */ 
+    }
   }
   const rss = /VmRSS:\s+(\d+) kB/.exec(fs.readFileSync(`/proc/${pid}/status`, "utf8"));
   return { cpu, memory: rss ? Number(rss[1]) * 1024 : 0 };
@@ -101,7 +108,11 @@ function startResources() {
 function sampleResources() {
   for (const c of monitor) {
     const r = measure(c);
-    if (!r || !c.last) { c.last = c.last || r; c.base = c.base || r; continue; }
+    if (!r || !c.last) { 
+      c.last = c.last || r;
+      c.base = c.base || r; 
+      continue; 
+    }
     const dt = r.t - c.last.t;
     if (dt < 0.001) continue;
     const pct = 100 * (r.cpu - c.last.cpu) / dt;
@@ -117,20 +128,32 @@ function resources(withSamples) {
   sampleResources();
   const out = {};
   for (const c of monitor) {
-    if (!c.base || !c.last) { out[c.name] = { error: c.error }; continue; }
+    if (!c.base || !c.last) { 
+      out[c.name] = { error: c.error };
+      continue; 
+    }
     const wall = c.last.t - c.base.t;
     const cpu = c.last.cpu - c.base.cpu;
     const sum = c.memory.reduce((a, b) => a + b, 0);
     out[c.name] = {
       wall_seconds: +wall.toFixed(4),
       cpu_seconds: +cpu.toFixed(6),
-      cpu_percent: { avg: wall > 0 ? +(100 * cpu / wall).toFixed(1) : null,
-                     min: c.cpuMin === null ? null : +c.cpuMin.toFixed(1), max: c.cpuMax === null ? null : +c.cpuMax.toFixed(1) },
-      memory_bytes: { avg: Math.round(sum / c.memory.length), min: Math.min(...c.memory), max: Math.max(...c.memory) },
+      cpu_percent: { 
+        avg: wall > 0 ? +(100 * cpu / wall).toFixed(1) : null,
+        min: c.cpuMin === null ? null : +c.cpuMin.toFixed(1), 
+        max: c.cpuMax === null ? null : +c.cpuMax.toFixed(1) 
+      },
+      memory_bytes: { 
+        avg: Math.round(sum / c.memory.length), 
+        min: Math.min(...c.memory), 
+        max: Math.max(...c.memory) 
+      },
       samples: c.samples.length,
       error: c.error,
     };
-    if (withSamples) out[c.name].series = c.samples;
+    if (withSamples) {
+      out[c.name].series = c.samples;
+    }
   }
   return out;
 }
@@ -140,9 +163,15 @@ setInterval(sampleResources, (map.monitor && map.monitor.sample_ms) || 50);
 function reset() {
   startResources();
   stats = {
-    label, since: new Date().toISOString(), known: [...known].sort(),
-    total: counter(), known_sources: counter(), discovered_sources: counter(), other: counter(),
-    publishers: {}, max_inflight_services: 0,
+    label, 
+    since: new Date().toISOString(), 
+    known: [...known].sort(),
+    total: counter(), 
+    known_sources: counter(), 
+    discovered_sources: counter(), 
+    other: counter(),
+    publishers: {},
+    max_inflight_services: { main: 0, known: 0 },
   };
 }
 
@@ -173,38 +202,62 @@ function documentKind(pathname) {
   return pathname.split("/").filter(Boolean).length === 1 ? "storage-root" : "container";
 }
 
-// Requests to Virtuoso wait here when max_inflight are already running.
-let inflight = 0;
-const waiting = [];
-function acquire(start) {
-  if (inflight < map.max_inflight) {
-    inflight += 1;
-    stats.max_inflight_services = Math.max(stats.max_inflight_services, inflight);
+// Requests to a Virtuoso container wait here when max_inflight are already running in it. Known
+// publishers' services are in the "known" container, the others in "main".
+const containers = { main: { inflight: 0, waiting: [] }, known: { inflight: 0, waiting: [] } };
+for (const service of map.services) {
+  service.container = map.publishers[service.publisher].known ? "known" : "main";
+}
+
+function acquire(name, start) {
+  const c = containers[name];
+  if (c.inflight < map.max_inflight) {
+    c.inflight += 1;
+    stats.max_inflight_services[name] = Math.max(stats.max_inflight_services[name], c.inflight);
     start();
   } else {
-    waiting.push(start);
+    c.waiting.push(start);
   }
 }
-function release() {
-  inflight -= 1;
-  if (waiting.length) acquire(waiting.shift());
+
+function release(name) {
+  const c = containers[name];
+  c.inflight -= 1;
+  if (c.waiting.length) {
+    acquire(name, c.waiting.shift());
+  }
 }
 
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
 const documentAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 
-function forward(req, res, { target, host = "localhost" }, entry, isService) {
+function forward(req, res, { target, host = "localhost", container }, entry, isService) {
   const began = Date.now();
   const headers = {};
-  for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k)) headers[k] = v;
-  if (isService) headers.host = `localhost:${target}`;     // Virtuoso's endpoints are defined on their own ports
+  for (const [k, v] of Object.entries(req.headers)){
+    if (!HOP.has(k)) {
+      headers[k] = v;
+    }
+  }
+
+  // Virtuoso's endpoints are defined on their own ports
+  if (isService) { 
+    headers.host = `localhost:${target}`; 
+  }   
+
   let finished = false;
+
   const done = (status, bytes) => {
-    if (finished) return;
+    if (finished) {
+      return;
+    }
     finished = true;
-    if (isService) release();
+    if (isService){
+      release(container);
+    } 
     record({ ...entry, t: began, status, bytes, ms: Date.now() - began });
   };
+
   const send = () => {
     const upstream = http.request({
       host, port: target, method: req.method, path: req.url, headers,
@@ -228,7 +281,7 @@ function forward(req, res, { target, host = "localhost" }, entry, isService) {
     res.on("close", () => { if (!finished) { upstream.destroy(); done(499, 0); } });
     req.pipe(upstream);
   };
-  if (isService) acquire(send); else send();
+  if (isService) acquire(container, send); else send();
 }
 
 reset();
