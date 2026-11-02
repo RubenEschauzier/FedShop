@@ -38,18 +38,12 @@ const fs = require("fs");
 const http = require("http");
 const { performance } = require("perf_hooks");
 
-const map = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const log = process.argv[3] ? fs.createWriteStream(process.argv[3], { flags: "a" }) : null;
-const knownPublishers = Object.keys(map.publishers).filter((name) => map.publishers[name].known);
 const KINDS = ["document", "storage-root", "container", "server-root", "sparql"];
-
-let label = null;
-let known = new Set(knownPublishers);
-let stats;
+const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
 
 function counter() {
   const c = { requests: 0, bytes: 0, errors: 0 };
-  for (const kind of KINDS){
+  for (const kind of KINDS) {
     c[kind] = 0;
   }
   return c;
@@ -67,247 +61,267 @@ function readCgroup(dir) {
 function readProcess(pid) {
   let cpu = 0;
   for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
-    try { 
-      cpu += Number(fs.readFileSync(`/proc/${pid}/task/${tid}/schedstat`, "utf8").split(" ")[0]) / 1e9; 
-    } catch (e) { 
-      /* thread ended */ 
+    try {
+      cpu += Number(fs.readFileSync(`/proc/${pid}/task/${tid}/schedstat`, "utf8").split(" ")[0]) / 1e9;
+    } catch (e) {
+      /* thread ended */
     }
   }
   const rss = /VmRSS:\s+(\d+) kB/.exec(fs.readFileSync(`/proc/${pid}/status`, "utf8"));
   return { cpu, memory: rss ? Number(rss[1]) * 1024 : 0 };
 }
 
-const monitor = (map.monitor && map.monitor.components || []).map((c) => ({
-  name: c.name,
-  read: c.cgroup ? () => readCgroup(c.cgroup) : () => readProcess(c.pid),
-}));
-monitor.push({ name: "proxy", read: () => ({ cpu: (process.cpuUsage().user + process.cpuUsage().system) / 1e6,
-                                             memory: process.memoryUsage().rss }) });
-
-function measure(component) {
-  const t = performance.now() / 1000;
-  try {
-    return { t, ...component.read() };
-  } catch (e) {
-    component.error = e.message;
-    return null;
-  }
+function readSelf() {
+  const usage = process.cpuUsage();
+  return { cpu: (usage.user + usage.system) / 1e6, memory: process.memoryUsage().rss };
 }
 
-function startResources() {
-  for (const c of monitor) {
-    c.error = null;
-    const r = measure(c);
-    c.base = c.last = r;
-    c.cpuMin = c.cpuMax = null;
-    c.memory = r ? [r.memory] : [];
-    c.samples = r ? [{ t_ms: 0, cpu_percent: null, memory_bytes: r.memory }] : [];
+// CPU and memory of one component since the last start(). read() returns its counters {cpu, memory};
+// when it throws, the error is kept and the measurement skipped.
+class ComponentMonitor {
+  constructor(name, read) {
+    this.name = name;
+    this.read = read;
+    this.start();
   }
-}
 
-function sampleResources() {
-  for (const c of monitor) {
-    const r = measure(c);
-    if (!r || !c.last) { 
-      c.last = c.last || r;
-      c.base = c.base || r; 
-      continue; 
+  measure() {
+    const t = performance.now() / 1000;
+    try {
+      return { t, ...this.read() };
+    } catch (e) {
+      this.error = e.message;
+      return null;
     }
-    const dt = r.t - c.last.t;
-    if (dt < 0.001) continue;
-    const pct = 100 * (r.cpu - c.last.cpu) / dt;
-    c.cpuMin = c.cpuMin === null ? pct : Math.min(c.cpuMin, pct);
-    c.cpuMax = c.cpuMax === null ? pct : Math.max(c.cpuMax, pct);
-    c.memory.push(r.memory);
-    c.samples.push({ t_ms: Math.round((r.t - c.base.t) * 1000), cpu_percent: +pct.toFixed(1), memory_bytes: r.memory });
-    c.last = r;
   }
-}
 
-function resources(withSamples) {
-  sampleResources();
-  const out = {};
-  for (const c of monitor) {
-    if (!c.base || !c.last) { 
-      out[c.name] = { error: c.error };
-      continue; 
+  start() {
+    this.error = null;
+    const r = this.measure();
+    this.base = r;
+    this.last = r;
+    this.cpuMin = null;
+    this.cpuMax = null;
+    this.memory = r ? [r.memory] : [];
+    this.samples = r ? [{ t_ms: 0, cpu_percent: null, memory_bytes: r.memory }] : [];
+  }
+
+  sample() {
+    const r = this.measure();
+    if (!r || !this.last) {
+      this.last = this.last || r;
+      this.base = this.base || r;
+      return;
     }
-    const wall = c.last.t - c.base.t;
-    const cpu = c.last.cpu - c.base.cpu;
-    const sum = c.memory.reduce((a, b) => a + b, 0);
-    out[c.name] = {
+    const dt = r.t - this.last.t;
+    if (dt < 0.001) {
+      return;
+    }
+    const pct = 100 * (r.cpu - this.last.cpu) / dt;
+    this.cpuMin = this.cpuMin === null ? pct : Math.min(this.cpuMin, pct);
+    this.cpuMax = this.cpuMax === null ? pct : Math.max(this.cpuMax, pct);
+    this.memory.push(r.memory);
+    this.samples.push({ t_ms: Math.round((r.t - this.base.t) * 1000), cpu_percent: +pct.toFixed(1), memory_bytes: r.memory });
+    this.last = r;
+  }
+
+  summary(withSamples) {
+    if (!this.base || !this.last) {
+      return { error: this.error };
+    }
+    const wall = this.last.t - this.base.t;
+    const cpu = this.last.cpu - this.base.cpu;
+    const sum = this.memory.reduce((a, b) => a + b, 0);
+    const out = {
       wall_seconds: +wall.toFixed(4),
       cpu_seconds: +cpu.toFixed(6),
-      cpu_percent: { 
+      cpu_percent: {
         avg: wall > 0 ? +(100 * cpu / wall).toFixed(1) : null,
-        min: c.cpuMin === null ? null : +c.cpuMin.toFixed(1), 
-        max: c.cpuMax === null ? null : +c.cpuMax.toFixed(1) 
+        min: this.cpuMin === null ? null : +this.cpuMin.toFixed(1),
+        max: this.cpuMax === null ? null : +this.cpuMax.toFixed(1)
       },
-      memory_bytes: { 
-        avg: Math.round(sum / c.memory.length), 
-        min: Math.min(...c.memory), 
-        max: Math.max(...c.memory) 
+      memory_bytes: {
+        avg: Math.round(sum / this.memory.length),
+        min: Math.min(...this.memory),
+        max: Math.max(...this.memory)
       },
-      samples: c.samples.length,
-      error: c.error,
+      samples: this.samples.length,
+      error: this.error,
     };
     if (withSamples) {
-      out[c.name].series = c.samples;
+      out.series = this.samples;
+    }
+    return out;
+  }
+}
+
+// Request counts since the last reset, by source, kind and publisher. Every request is also written
+// to the log (if any), with the label at the time it finished.
+class RequestStats {
+  constructor(publishers, log) {
+    this.publishers = publishers;
+    this.defaultKnown = Object.keys(publishers).filter((name) => publishers[name].known);
+    this.log = log;
+    this.reset();
+  }
+
+  reset(options = {}) {
+    this.label = options.label ?? null;
+    this.known = new Set(options.known ?? this.defaultKnown);
+    this.counts = {
+      label: this.label,
+      since: new Date().toISOString(),
+      known: [...this.known].sort(),
+      total: counter(),
+      known_sources: counter(),
+      discovered_sources: counter(),
+      other: counter(),
+      publishers: {},
+    };
+  }
+
+  source(publisher) {
+    if (!publisher || !this.publishers[publisher]) {
+      return "other";
+    }
+    return this.known.has(publisher) ? "known" : "discovered";
+  }
+
+  record(entry) {
+    const counts = this.counts;
+    const group = { known: counts.known_sources, discovered: counts.discovered_sources, other: counts.other }[entry.source];
+    const groups = [counts.total, group];
+    if (entry.publisher) {
+      counts.publishers[entry.publisher] = counts.publishers[entry.publisher] || counter();
+      groups.push(counts.publishers[entry.publisher]);
+    }
+    for (const c of groups) {
+      c.requests += 1;
+      c[entry.kind] += 1;
+      c.bytes += entry.bytes;
+      c.errors += entry.status >= 500 ? 1 : 0;
+    }
+    if (this.log) {
+      this.log.write(JSON.stringify({ label: this.label, ...entry }) + "\n");
+    }
+  }
+}
+
+// Requests to a Virtuoso container wait here when max requests are already running in it. peak is
+// the most that ran at once since resetPeak().
+class Limiter {
+  constructor(max) {
+    this.max = max;
+    this.inflight = 0;
+    this.waiting = [];
+    this.peak = 0;
+  }
+
+  acquire(start) {
+    if (this.inflight < this.max) {
+      this.inflight += 1;
+      this.peak = Math.max(this.peak, this.inflight);
+      start();
+    } else {
+      this.waiting.push(start);
+    }
+  }
+
+  release() {
+    this.inflight -= 1;
+    if (this.waiting.length) {
+      this.acquire(this.waiting.shift());
+    }
+  }
+
+  resetPeak() {
+    this.peak = 0;
+  }
+}
+
+function documentKind(pathname) {
+  if (pathname === "/") {
+    return "server-root";
+  }
+  if (!pathname.endsWith("/")) {
+    return "document";
+  }
+  return pathname.split("/").filter(Boolean).length === 1 ? "storage-root" : "container";
+}
+
+function withoutHop(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (!HOP.has(k)) {
+      out[k] = v;
     }
   }
   return out;
 }
 
-setInterval(sampleResources, (map.monitor && map.monitor.sample_ms) || 50);
-
-function reset() {
-  startResources();
-  stats = {
-    label, 
-    since: new Date().toISOString(), 
-    known: [...known].sort(),
-    total: counter(), 
-    known_sources: counter(), 
-    discovered_sources: counter(), 
-    other: counter(),
-    publishers: {},
-    max_inflight_services: { main: 0, known: 0 },
-  };
-}
-
-function record(entry) {
-  const group = { known: stats.known_sources, discovered: stats.discovered_sources, other: stats.other }[entry.source];
-  const groups = [stats.total, group];
-  if (entry.publisher) {
-    stats.publishers[entry.publisher] = stats.publishers[entry.publisher] || counter();
-    groups.push(stats.publishers[entry.publisher]);
-  }
-  for (const c of groups) {
-    c.requests += 1;
-    c[entry.kind] += 1;
-    c.bytes += entry.bytes;
-    c.errors += entry.status >= 500 ? 1 : 0;
-  }
-  if (log) log.write(JSON.stringify({ label, ...entry }) + "\n");
-}
-
-function source(publisher) {
-  if (!publisher || !map.publishers[publisher]) return "other";
-  return known.has(publisher) ? "known" : "discovered";
-}
-
-function documentKind(pathname) {
-  if (pathname === "/") return "server-root";
-  if (!pathname.endsWith("/")) return "document";
-  return pathname.split("/").filter(Boolean).length === 1 ? "storage-root" : "container";
-}
-
-// Requests to a Virtuoso container wait here when max_inflight are already running in it. Known
-// publishers' services are in the "known" container, the others in "main".
-const containers = { main: { inflight: 0, waiting: [] }, known: { inflight: 0, waiting: [] } };
-for (const service of map.services) {
-  service.container = map.publishers[service.publisher].known ? "known" : "main";
-}
-
-function acquire(name, start) {
-  const c = containers[name];
-  if (c.inflight < map.max_inflight) {
-    c.inflight += 1;
-    stats.max_inflight_services[name] = Math.max(stats.max_inflight_services[name], c.inflight);
-    start();
-  } else {
-    c.waiting.push(start);
-  }
-}
-
-function release(name) {
-  const c = containers[name];
-  c.inflight -= 1;
-  if (c.waiting.length) {
-    acquire(name, c.waiting.shift());
-  }
-}
-
-const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
-const documentAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
-
-function forward(req, res, { target, host = "localhost", container }, entry, isService) {
+// Forwards a request to an upstream {host, port, agent, hostHeader?, limiter?} and records it in stats
+// once the response has ended, the upstream failed (502) or the client went away (499).
+function forward(req, res, upstream, entry, stats) {
   const began = Date.now();
-  const headers = {};
-  for (const [k, v] of Object.entries(req.headers)){
-    if (!HOP.has(k)) {
-      headers[k] = v;
-    }
+  const headers = withoutHop(req.headers);
+  if (upstream.hostHeader) {
+    headers.host = upstream.hostHeader;
   }
-
-  // Virtuoso's endpoints are defined on their own ports
-  if (isService) { 
-    headers.host = `localhost:${target}`; 
-  }   
 
   let finished = false;
-
   const done = (status, bytes) => {
     if (finished) {
       return;
     }
     finished = true;
-    if (isService){
-      release(container);
-    } 
-    record({ ...entry, t: began, status, bytes, ms: Date.now() - began });
+    if (upstream.limiter) {
+      upstream.limiter.release();
+    }
+    stats.record({ ...entry, t: began, status, bytes, ms: Date.now() - began });
   };
 
   const send = () => {
-    const upstream = http.request({
-      host, port: target, method: req.method, path: req.url, headers,
-      // Services: a fresh connection per request, so no reused socket can have been dropped by Virtuoso.
-      agent: isService ? false : documentAgent,
+    const outgoing = http.request({
+      host: upstream.host, port: upstream.port, method: req.method, path: req.url, headers, agent: upstream.agent,
     }, (up) => {
-      const out = {};
-      for (const [k, v] of Object.entries(up.headers)) if (!HOP.has(k)) out[k] = v;
-      res.writeHead(up.statusCode, out);
+      res.writeHead(up.statusCode, withoutHop(up.headers));
       let bytes = 0;
       up.on("data", (chunk) => { bytes += chunk.length; });
       up.on("end", () => done(up.statusCode, bytes));
       up.on("error", () => done(502, bytes));
       up.pipe(res);
     });
-    upstream.on("error", () => {
-      if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
+    outgoing.on("error", () => {
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "text/plain" });
+      }
       res.end("Bad gateway");
       done(502, 0);
     });
-    res.on("close", () => { if (!finished) { upstream.destroy(); done(499, 0); } });
-    req.pipe(upstream);
+    res.on("close", () => {
+      if (!finished) {
+        outgoing.destroy();
+        done(499, 0);
+      }
+    });
+    req.pipe(outgoing);
   };
-  if (isService) acquire(container, send); else send();
-}
 
-reset();
-
-http.createServer((req, res) => {
-  const pathname = new URL(req.url, "http://x").pathname;
-  const publisher = decodeURIComponent(pathname.split("/").filter(Boolean)[0] || "") || null;
-  const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher,
-                  kind: documentKind(pathname), source: source(publisher) };
-  forward(req, res, map.documents, entry, false);
-}).listen(map.documents.port);
-
-for (const service of map.services) {
-  http.createServer((req, res) => {
-    const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher: service.publisher,
-                    kind: "sparql", source: source(service.publisher) };
-    forward(req, res, service, entry, true);
-  }).listen(service.port);
+  if (upstream.limiter) {
+    upstream.limiter.acquire(send);
+  } else {
+    send();
+  }
 }
 
 // One upstream per server: the Solid server, and the first service on every Virtuoso host.
-function health() {
+function health(map) {
   const targets = { documents: { ...map.documents, path: "/" } };
   for (const s of map.services) {
     const key = s.host || "localhost";
-    if (!targets[key]) targets[key] = { ...s, path: `/${s.publisher}/sparql` };
+    if (!targets[key]) {
+      targets[key] = { ...s, path: `/${s.publisher}/sparql` };
+    }
   }
   return Promise.all(Object.entries(targets).map(([name, t]) => new Promise((resolve) => {
     const r = http.get({ host: t.host || "localhost", port: t.target, path: t.path, timeout: 2000,
@@ -318,33 +332,104 @@ function health() {
   }))).then(Object.fromEntries);
 }
 
-http.createServer((req, res) => {
-  const reply = (status, body) => {
-    res.writeHead(status, { "content-type": "application/json" });
-    res.end(JSON.stringify(body, null, 2));
-  };
-  const url = new URL(req.url, "http://x");
-  if (req.method === "GET" && url.pathname === "/health") {
-    health().then((upstreams) => reply(Object.values(upstreams).every(Boolean) ? 200 : 503, upstreams));
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/stats") {
-    return reply(200, { ...stats, resources: resources(url.searchParams.get("samples") === "1") });
-  }
-  if (req.method === "POST" && url.pathname === "/reset") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
-      let options = {};
-      try { options = body.trim() ? JSON.parse(body) : {}; } catch (e) { return reply(400, { error: `Body is not JSON: ${e.message}` }); }
-      label = options.label ?? null;
-      known = new Set(options.known ?? knownPublishers);
-      reset();
-      reply(200, { label, known: stats.known });
-    });
-    return;
-  }
-  reply(404, { error: "Use GET /stats, GET /health or POST /reset" });
-}).listen(map.control_port);
+function main(mapPath, logPath) {
+  const map = JSON.parse(fs.readFileSync(mapPath, "utf8"));
+  const log = logPath ? fs.createWriteStream(logPath, { flags: "a" }) : null;
+  const stats = new RequestStats(map.publishers, log);
+  const monitors = (map.monitor && map.monitor.components || []).map((c) =>
+    new ComponentMonitor(c.name, c.cgroup ? () => readCgroup(c.cgroup) : () => readProcess(c.pid)));
+  monitors.push(new ComponentMonitor("proxy", readSelf));
+  // Known publishers' services are in the "known" Virtuoso container, the others in "main"
+  const limiters = { main: new Limiter(map.max_inflight), known: new Limiter(map.max_inflight) };
 
-console.log(`Proxy: documents on :${map.documents.port}, ${map.services.length} services, control on :${map.control_port}`);
+  setInterval(() => {
+    for (const m of monitors) {
+      m.sample();
+    }
+  }, (map.monitor && map.monitor.sample_ms) || 50);
+
+  const documents = {
+    host: map.documents.host || "localhost",
+    port: map.documents.target,
+    agent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
+  };
+  http.createServer((req, res) => {
+    const pathname = new URL(req.url, "http://x").pathname;
+    const publisher = decodeURIComponent(pathname.split("/").filter(Boolean)[0] || "") || null;
+    const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher,
+                    kind: documentKind(pathname), source: stats.source(publisher) };
+    forward(req, res, documents, entry, stats);
+  }).listen(map.documents.port);
+
+  for (const service of map.services) {
+    const upstream = {
+      host: service.host || "localhost",
+      port: service.target,
+      // A fresh connection per request, so no reused socket can have been dropped by Virtuoso.
+      agent: false,
+      // Virtuoso's endpoints are defined on their own ports
+      hostHeader: `localhost:${service.target}`,
+      limiter: map.publishers[service.publisher].known ? limiters.known : limiters.main,
+    };
+    http.createServer((req, res) => {
+      const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher: service.publisher,
+                      kind: "sparql", source: stats.source(service.publisher) };
+      forward(req, res, upstream, entry, stats);
+    }).listen(service.port);
+  }
+
+  http.createServer((req, res) => {
+    const reply = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body, null, 2));
+    };
+    const url = new URL(req.url, "http://x");
+    if (req.method === "GET" && url.pathname === "/health") {
+      health(map).then((upstreams) => reply(Object.values(upstreams).every(Boolean) ? 200 : 503, upstreams));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/stats") {
+      const withSamples = url.searchParams.get("samples") === "1";
+      for (const m of monitors) {
+        m.sample();
+      }
+      reply(200, {
+        ...stats.counts,
+        max_inflight_services: { main: limiters.main.peak, known: limiters.known.peak },
+        resources: Object.fromEntries(monitors.map((m) => [m.name, m.summary(withSamples)])),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/reset") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        let options = {};
+        try {
+          options = body.trim() ? JSON.parse(body) : {};
+        } catch (e) {
+          reply(400, { error: `Body is not JSON: ${e.message}` });
+          return;
+        }
+        for (const m of monitors) {
+          m.start();
+        }
+        stats.reset(options);
+        for (const limiter of Object.values(limiters)) {
+          limiter.resetPeak();
+        }
+        reply(200, { label: stats.label, known: stats.counts.known });
+      });
+      return;
+    }
+    reply(404, { error: "Use GET /stats, GET /health or POST /reset" });
+  }).listen(map.control_port);
+
+  console.log(`Proxy: documents on :${map.documents.port}, ${map.services.length} services, control on :${map.control_port}`);
+}
+
+if (require.main === module) {
+  main(process.argv[2], process.argv[3]);
+}
+
+module.exports = { ComponentMonitor, RequestStats, Limiter, documentKind };
