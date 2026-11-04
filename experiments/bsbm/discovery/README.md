@@ -63,7 +63,7 @@ The reference answer of every instance (`results.csv`) is its answer over all pu
 
 ### Counting requests
 
-The proxy holds the public ports: 3000 for documents and every service's port from 34300. The Solid server and Virtuoso listen on the public port + `proxy.port_offset` (13000, 44300 onwards), so every engine reaches them only through the proxy and is counted the same way, whatever it is written in. Requests to Virtuoso go over a fresh connection each and at most `proxy.max_inflight` at once to each Virtuoso container; the rest wait in the proxy.
+The proxy holds the public ports: 3000 for documents and every service's port from 34300. The Solid server and Virtuoso listen on the public port + `proxy.port_offset` (13000, 44300 onwards), so every engine reaches them only through the proxy and is counted the same way, whatever it is written in. Requests are forwarded as they arrive, nothing waits in the proxy; requests to Virtuoso go over a fresh connection each.
 
 Every request is counted by source and by kind:
 
@@ -242,7 +242,6 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
 | `proxy.port_offset` | 10000 | same | load, serve | the Solid server and the services listen on their public port + this |
 | `proxy.control_port` | 3999 | same | serve | `GET /stats`, `POST /reset` |
-| `proxy.max_inflight` | 48 | same | serve | requests to each Virtuoso container at once; the rest wait in the proxy |
 | `proxy.sample_ms` | 50 | same | serve | CPU and memory sampling interval, for min and max |
 | `workload.templates_dir` | `discovery/queries` | same | build-workload | |
 | `workload.per_template` | 5 | same | build-workload | instances kept per template |

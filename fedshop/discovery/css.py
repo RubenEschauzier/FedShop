@@ -37,7 +37,6 @@ def proxy_map(dconf, publishers, documents_host="localhost"):
                      for n, i in publishers.items() if i["service"]],
         "publishers": {n: {"kind": i["kind"], "known": i["known"]} for n, i in publishers.items()},
         "control_port": int(dconf.proxy["control_port"]),
-        "max_inflight": int(dconf.proxy["max_inflight"]),
         "monitor": {"sample_ms": int(dconf.proxy["sample_ms"]), "components": []},
     }
 

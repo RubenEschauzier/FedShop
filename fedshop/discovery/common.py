@@ -37,7 +37,7 @@ DEFAULTS = {
                  "known_isql_port": 1113, "known_http_port": 8892, "first_service_port": 34300,
                  "external": False, "host": "localhost", "known_host": "localhost", "wait_timeout": 600},
     "css": {"port": 3000, "config": None},
-    "proxy": {"port_offset": 10000, "control_port": 3999, "max_inflight": 48, "sample_ms": 50},
+    "proxy": {"port_offset": 10000, "control_port": 3999, "sample_ms": 50},
     "workload": {"templates_dir": None, "per_template": 5, "max_candidates": 40, "max_rows": 100000, "seed": 42},
 }
 

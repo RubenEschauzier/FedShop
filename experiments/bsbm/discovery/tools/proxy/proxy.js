@@ -8,7 +8,7 @@
 //                                                  host, default localhost) it listens on
 //   services: [{port, target, host?, publisher}]   one per query service
 //   publishers: {name: {kind, known}}              every publisher, and whether it is known up front
-//   control_port, max_inflight                     control API; most requests in flight to each Virtuoso container at once
+//   control_port                                   control API
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
 //
 // Every request is counted by source and by kind:
@@ -207,38 +207,6 @@ class RequestStats {
   }
 }
 
-// Requests to a Virtuoso container wait here when max requests are already running in it. peak is
-// the most that ran at once since resetPeak().
-class Limiter {
-  constructor(max) {
-    this.max = max;
-    this.inflight = 0;
-    this.waiting = [];
-    this.peak = 0;
-  }
-
-  acquire(start) {
-    if (this.inflight < this.max) {
-      this.inflight += 1;
-      this.peak = Math.max(this.peak, this.inflight);
-      start();
-    } else {
-      this.waiting.push(start);
-    }
-  }
-
-  release() {
-    this.inflight -= 1;
-    if (this.waiting.length) {
-      this.acquire(this.waiting.shift());
-    }
-  }
-
-  resetPeak() {
-    this.peak = 0;
-  }
-}
-
 function documentKind(pathname) {
   if (pathname === "/") {
     return "server-root";
@@ -259,8 +227,8 @@ function withoutHop(headers) {
   return out;
 }
 
-// Forwards a request to an upstream {host, port, agent, hostHeader?, limiter?} and records it in stats
-// once the response has ended, the upstream failed (502) or the client went away (499).
+// Forwards a request to an upstream {host, port, agent, hostHeader?} as soon as it arrives, and records
+// it in stats once the response has ended, the upstream failed (502) or the client went away (499).
 function forward(req, res, upstream, entry, stats) {
   const began = Date.now();
   const headers = withoutHop(req.headers);
@@ -274,44 +242,33 @@ function forward(req, res, upstream, entry, stats) {
       return;
     }
     finished = true;
-    if (upstream.limiter) {
-      upstream.limiter.release();
-    }
     stats.record({ ...entry, t: began, status, bytes, ms: Date.now() - began });
   };
 
-  const send = () => {
-    const outgoing = http.request({
-      host: upstream.host, port: upstream.port, method: req.method, path: req.url, headers, agent: upstream.agent,
-    }, (up) => {
-      res.writeHead(up.statusCode, withoutHop(up.headers));
-      let bytes = 0;
-      up.on("data", (chunk) => { bytes += chunk.length; });
-      up.on("end", () => done(up.statusCode, bytes));
-      up.on("error", () => done(502, bytes));
-      up.pipe(res);
-    });
-    outgoing.on("error", () => {
-      if (!res.headersSent) {
-        res.writeHead(502, { "content-type": "text/plain" });
-      }
-      res.end("Bad gateway");
-      done(502, 0);
-    });
-    res.on("close", () => {
-      if (!finished) {
-        outgoing.destroy();
-        done(499, 0);
-      }
-    });
-    req.pipe(outgoing);
-  };
-
-  if (upstream.limiter) {
-    upstream.limiter.acquire(send);
-  } else {
-    send();
-  }
+  const outgoing = http.request({
+    host: upstream.host, port: upstream.port, method: req.method, path: req.url, headers, agent: upstream.agent,
+  }, (up) => {
+    res.writeHead(up.statusCode, withoutHop(up.headers));
+    let bytes = 0;
+    up.on("data", (chunk) => { bytes += chunk.length; });
+    up.on("end", () => done(up.statusCode, bytes));
+    up.on("error", () => done(502, bytes));
+    up.pipe(res);
+  });
+  outgoing.on("error", () => {
+    if (!res.headersSent) {
+      res.writeHead(502, { "content-type": "text/plain" });
+    }
+    res.end("Bad gateway");
+    done(502, 0);
+  });
+  res.on("close", () => {
+    if (!finished) {
+      outgoing.destroy();
+      done(499, 0);
+    }
+  });
+  req.pipe(outgoing);
 }
 
 // One upstream per server: the Solid server, and the first service on every Virtuoso host.
@@ -339,8 +296,6 @@ function main(mapPath, logPath) {
   const monitors = (map.monitor && map.monitor.components || []).map((c) =>
     new ComponentMonitor(c.name, c.cgroup ? () => readCgroup(c.cgroup) : () => readProcess(c.pid)));
   monitors.push(new ComponentMonitor("proxy", readSelf));
-  // Known publishers' services are in the "known" Virtuoso container, the others in "main"
-  const limiters = { main: new Limiter(map.max_inflight), known: new Limiter(map.max_inflight) };
 
   setInterval(() => {
     for (const m of monitors) {
@@ -369,7 +324,6 @@ function main(mapPath, logPath) {
       agent: false,
       // Virtuoso's endpoints are defined on their own ports
       hostHeader: `localhost:${service.target}`,
-      limiter: map.publishers[service.publisher].known ? limiters.known : limiters.main,
     };
     http.createServer((req, res) => {
       const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher: service.publisher,
@@ -395,7 +349,6 @@ function main(mapPath, logPath) {
       }
       reply(200, {
         ...stats.counts,
-        max_inflight_services: { main: limiters.main.peak, known: limiters.known.peak },
         resources: Object.fromEntries(monitors.map((m) => [m.name, m.summary(withSamples)])),
       });
       return;
@@ -415,9 +368,6 @@ function main(mapPath, logPath) {
           m.start();
         }
         stats.reset(options);
-        for (const limiter of Object.values(limiters)) {
-          limiter.resetPeak();
-        }
         reply(200, { label: stats.label, known: stats.counts.known });
       });
       return;
@@ -432,4 +382,4 @@ if (require.main === module) {
   main(process.argv[2], process.argv[3]);
 }
 
-module.exports = { ComponentMonitor, RequestStats, Limiter, documentKind };
+module.exports = { ComponentMonitor, RequestStats, documentKind };

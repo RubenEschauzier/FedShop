@@ -116,10 +116,10 @@ function counter() {
 }
 
 // The counts the proxy should report for these log entries
-function expectedCounts(label, known, entries, maxInflight) {
+function expectedCounts(label, known, entries) {
   const counts = {
     label, known, total: counter(), known_sources: counter(), discovered_sources: counter(), other: counter(),
-    publishers: {}, max_inflight_services: maxInflight,
+    publishers: {},
   };
   const groups = { known: counts.known_sources, discovered: counts.discovered_sources, other: counts.other };
   for (const entry of entries) {
@@ -197,7 +197,6 @@ before(async () => {
       vendor3: { kind: "vendor", known: false },
     },
     control_port: ports.control,
-    max_inflight: 1,
     monitor: {
       sample_ms: 20,
       components: [
@@ -281,12 +280,12 @@ test("counts and logs every request by source, kind and publisher", async () => 
     }, 100);
   });
 
-  // Three requests to one Virtuoso container run one at a time, next to one in the other container
+  // Requests are forwarded as they arrive: nothing waits in the proxy
   const answers = await Promise.all([sparql("vendor2"), sparql("vendor2"), sparql("vendor2"), sparql("vendor1")]);
   for (const [i, name] of ["vendor2", "vendor2", "vendor2", "vendor1"].entries()) {
     assert.deepEqual([answers[i].status, answers[i].body], [200, `sparql:localhost:${services[name].port}`]);
   }
-  assert.equal(services.vendor2.peak, 1);
+  assert.equal(services.vendor2.peak, 3);
 
   const refused = await sparql("vendor3");
   assert.deepEqual([refused.status, refused.body], [502, "Bad gateway"]);
@@ -320,11 +319,11 @@ test("counts and logs every request by source, kind and publisher", async () => 
 
   const { body: stats } = await control("GET", "/stats");
   assert.deepEqual(Object.keys(stats), ["label", "since", "known", "total", "known_sources", "discovered_sources",
-                                        "other", "publishers", "max_inflight_services", "resources"]);
+                                        "other", "publishers", "resources"]);
   assert.deepEqual(Object.keys(stats.total), ["requests", "bytes", "errors", ...KINDS]);
   assert.equal("series" in stats.resources.endpoints, false);
   const { since, resources, ...counts } = stats;
-  assert.deepEqual(counts, expectedCounts("phase1", ["vendor1"], expected, { main: 1, known: 1 }));
+  assert.deepEqual(counts, expectedCounts("phase1", ["vendor1"], expected));
 });
 
 test("POST /reset sets the label and the publishers counted as known", async () => {
@@ -341,7 +340,7 @@ test("POST /reset sets the label and the publishers counted as known", async () 
   ];
   const { body: stats } = await control("GET", "/stats");
   const { since, resources, ...counts } = stats;
-  assert.deepEqual(counts, expectedCounts("q1", ["taxonomy", "vendor2"], expected, { main: 0, known: 0 }));
+  assert.deepEqual(counts, expectedCounts("q1", ["taxonomy", "vendor2"], expected));
   assert.equal(logEntries("q1").length, 3);
 
   // An explicit null is the same as leaving it out
@@ -362,6 +361,26 @@ test("the control API rejects a body that is not JSON and unknown routes", async
 
   const current = (await control("GET", "/stats")).body;
   assert.deepEqual([current.label, current.since], [previous.label, previous.since]);
+});
+
+test("a client that gives up on a query service holds up no later request", async () => {
+  await control("POST", "/reset", JSON.stringify({ label: "abandoned" }));
+  const clients = Array.from({ length: 3 }, () => http.request({
+    host: "localhost", port: ports.vendor2, path: "/vendor2/sparql", method: "POST", agent: false,
+  }));
+  for (const req of clients) {
+    req.on("error", () => {});
+    req.end("query=ASK%7B%7D");
+  }
+  await wait(SERVICE_DELAY_MS / 2);
+  for (const req of clients) {
+    req.destroy();
+  }
+
+  const answer = await sparql("vendor2");
+  assert.deepEqual([answer.status, answer.body], [200, `sparql:localhost:${services.vendor2.port}`]);
+  await wait(50);
+  assert.deepEqual(logEntries("abandoned").map((e) => e.status).sort(), [200, 499, 499, 499]);
 });
 
 test("GET /health checks the Solid server and one service per Virtuoso host", async () => {
