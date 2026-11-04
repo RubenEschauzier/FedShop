@@ -120,10 +120,10 @@ Templates in `queries/`, with `{{Name}}` placeholders. q01–q12 follow FedShop'
 | q04 | analytical | – | products of either of two types, each with its own bound, offered somewhere |
 | q05 | analytical | – | products of the same type with close numeric values |
 | q06 | analytical | my shop's products and prices | those whose label contains a word |
-| q07 | product | my shop's offers for a product | its label, its reviews at every site, with reviewer names |
+| q07 | product | my shop's offers for a product still valid at a date, if any (my shop is in the US) | its label, its reviews at every site with reviewer names, if any |
 | q08 | product | – | a product's English reviews at every site, with reviewers |
 | q09 | lookup | a review at my review site | its reviewer's name and country |
-| q10 | product | my shop's price for a product | cheaper offers elsewhere, delivered within some days |
+| q10 | product | – | a product's offers at every shop from vendors in the US, delivered within 3 days and still valid at a date |
 | q11 | control | everything my shop says about an offer | – |
 | q12 | lookup | an offer at my shop, its vendor | the product's label, at its brand |
 | q13 | analytical | – | the other products of a product's brand, with their offers |
@@ -144,7 +144,7 @@ The full config gives 80 instances (5 per template): 40 hybrid-join, 35 discover
 | q01 / q03 / q04 / q05 | 20–81 / 56–82 / 34–54 / 24–144 | 29–112 | 942× / 670× / 2,350× / 1,545× (brands) |
 | q06 | 10–18 | 14–29 | – |
 | q07 / q08 | 10–26 / 10–14 | 18–24 | 21,766× / 32,668× (review sites) |
-| q10 | 2–5 | 2–4 | 4,506× (shops) |
+| q10 | not rebuilt yet | | |
 | q13 | 59–345 | 20–21 | 3× |
 | q14 / q16 | 24–88 / 10–35 | 14–54 | 133× / 31× (review sites) |
 | q15 | 6–18 | 11–30 | 2,601× (review sites) |
@@ -280,7 +280,7 @@ Every step runs in containers on one Docker network:
 The benchmark has no runner of its own; runners live in their own project. What an engine gets per instance (`workload/<query>/instance_<i>/`):
 
 - **The query.** `injected.sparql`: its `SERVICE` clauses name the endpoints the user knows. Seeds for traversal are the query's own IRIs. No endpoint list is given.
-- **Or its plain form.** `plain.sparql` is the same query without `SERVICE` clauses, for engines that select sources themselves: give them the known endpoints (`sources/known-endpoints.tsv`) and the seeds. Without `SERVICE`, a pattern matches any publisher, so the plain form has its own answer, `plain-results.csv`; where `SERVICE` named "my shop" (q06, q07, q10, q15, q16) it is larger.
+- **Or its plain form.** `plain.sparql` is the same query without `SERVICE` clauses, for engines that select sources themselves: give them the known endpoints (`sources/known-endpoints.tsv`) and the seeds. Without `SERVICE`, a pattern matches any publisher, so the plain form has its own answer, `plain-results.csv`; where `SERVICE` named "my shop" (q06, q07, q15, q16) it is larger.
 - **The reference answer.** `results.csv` (or `plain-results.csv`). Compare answers as sets: publishers with a service serve every triple twice, from their service and from their documents, so an engine that merges sources as a bag repeats rows. All templates are `SELECT DISTINCT`.
 - **Request counts.** Before an instance, `POST /reset` on the proxy's control port with the instance as label and, for the `SERVICE` form, the publishers its `SERVICE` clauses name as `known`; after it, `GET /stats` (see Serving).
 
@@ -326,7 +326,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **Rewritten templates.** q01–q12 are rewritten: `?local owl:sameAs <global>` becomes `?listing fs:listingOf <product>`, specification patterns move to the brand's product, and the known part goes in `SERVICE` clauses.
 - **Tied to what shops sell.** q01, q03 and q04 also require the product to be offered by some shop, and q06 to be offered by my shop.
 - **Features.** In this data a product's features are independent of its types, so a type plus two or three features leaves at most one product. q01 and q04 select by type and numeric bounds instead, q03 keeps one feature (as the one to lack), and q05 asks for the same type instead of a shared feature. Its windows are ±120 and ±170 instead of ±20 and ±70.
-- **q07** is a product page with my shop's offers and every site's reviews; **q10** is a price check against my shop's price instead of a country and date filter.
+- **q07** is FedShop's q07 with `fs:listingOf` for `owl:sameAs`, its offers part in `SERVICE` on my shop, which is a US shop so that FedShop's fixed US applies to it; `currentDate` is chosen as FedShop chooses it, below the end of validity of one of my shop's offers. As in FedShop, its products have offers, so both `OPTIONAL`s match; **q10** is FedShop's q10 with `fs:listingOf` for `owl:sameAs` and the US as `{{Country}}`; it names no shop, so it has no `SERVICE`, and `currentDate` is chosen the same way, below the end of validity of one of its offers.
 - **q09** also asks for the reviewer's name and country, so it crosses into the reviewer's storage.
 - **Sets, not bags.** Every template is `SELECT DISTINCT` (sources overlap), and `LIMIT`/`OFFSET` are dropped: answers are compared as complete sets, which also gives throughput curves. Time to the first *k* results can be read off a run instead.
 - **No `ORDER BY`.** Without `LIMIT` it only orders the output, and it would block streaming: an engine could emit nothing before it has everything.

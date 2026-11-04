@@ -29,6 +29,7 @@ import random
 import re
 import shutil
 from collections import Counter, defaultdict
+from datetime import timedelta, datetime
 from pathlib import Path
 
 from .common import BSBM, LOGGER, RDF_TYPE, RDFS_LABEL, load_publishers, publisher_of, sparql_csv, sparql_raw_csv
@@ -71,6 +72,13 @@ class Values:
             self.offers_at[publisher_of(dconf, r["g"])][r["x"]].append(r["o"])
             self.offer_count[r["x"]] += 1
         self.sold = sorted(self.offer_count)
+        self.valid_to = {r["o"]: datetime.fromisoformat(r["d"])    # offer -> end of validity
+                         for r in self.rows("SELECT ?o ?d WHERE { GRAPH ?g { ?o bsbm:validTo ?d } }")}
+        self.country = {publisher_of(dconf, r["g"]): r["c"]        # shop -> its vendor's country
+                        for r in self.rows("SELECT DISTINCT ?g ?c WHERE { GRAPH ?g { ?o bsbm:vendor ?v . ?v bsbm:country ?c } }")}
+        self.us = f"{dconf.ns('taxonomy')}countries#US"
+        self.delivery_days = {r["o"]: int(r["d"])                   # offer -> delivery days
+                              for r in self.rows("SELECT ?o ?d WHERE { GRAPH ?g { ?o bsbm:deliveryDays ?d } }")}
         self.reviews_at = defaultdict(list)                         # site -> reviews
         self.review_count, self.english_count = Counter(), Counter()
         self.review_sites = defaultdict(set)
@@ -125,6 +133,20 @@ def threshold_above(values, target):
     return values[min(target, len(values)) - 1] - 1 if values else 0
 
 
+def us_offers(values, product):
+    """The offers for a product, at any shop, by vendors in the US."""
+    return [o for s, by in values.offers_at.items() if values.country.get(s) == values.us for o in by.get(product, [])]
+
+
+def current_date(values, anchors, matching, rng):
+    """q07's and q10's currentDate, chosen as FedShop chooses it: below the validity of one of the anchor offers,
+    the validity of another matching offer ending earlier, or else a day before. That anchor offer stays valid."""
+    fmt = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S")
+    bound = rng.choice(sorted(values.valid_to[o] for o in anchors if o in values.valid_to)) - timedelta(days=1)
+    earlier = sorted({values.valid_to[o] for o in matching if o in values.valid_to and values.valid_to[o] < bound})
+    return fmt(rng.choice(earlier) if earlier else bound)
+
+
 def candidates(values, query, rng, limit, meta):
     """Yield dicts of placeholder values for a template, seeded, aiming at its rows range."""
     lo, hi = meta["rows"]
@@ -171,16 +193,28 @@ def candidates(values, query, rng, limit, meta):
             fitting = sorted(g for g, n in grams.items() if lo <= n <= hi)
             if fitting:
                 yield {"Shop": values.endpoint_of(shop), "word": rng.choice(fitting)}
-    elif query in ("q07", "q10", "q15"):
-        need = {"q07": lambda x: lo <= values.review_count[x] <= hi and len(values.review_sites[x]) >= 3,
-                "q10": lambda x: values.offer_count[x] >= 4,
-                "q15": lambda x: values.review_count[x] >= 25}[query]
-        pairs = [(shop, x) for shop in values.shops for x in values.offers_at[shop] if need(x)]
-        for shop, product in shuffled(pairs)[:limit]:
-            v = {"Shop": values.endpoint_of(shop), "Product": product}
-            if query == "q10":
-                v["days"] = rng.randint(5, 21)
-            yield v
+    elif query == "q07":
+        # FedShop's q07 asks for offers from vendors in the US, so my shop is one of them
+        us_shops = [shop for shop in values.shops if values.country.get(shop) == values.us]
+        if not us_shops:
+            LOGGER.warning("q07: no known shop is in the US")
+            return
+        need = lambda x: lo <= values.review_count[x] <= hi and len(values.review_sites[x]) >= 3
+        pairs = shuffled([(shop, x) for shop in us_shops for x in values.offers_at[shop] if need(x)
+                          if any(o in values.valid_to for o in values.offers_at[shop][x])])
+        for shop, product in pairs[:limit]:
+            yield {"Shop": values.endpoint_of(shop), "Product": product, "Country": values.us,
+                   "currentDate": current_date(values, values.offers_at[shop][product], us_offers(values, product), rng)}
+    elif query == "q10":
+        # FedShop's q10: offers by US vendors delivered within 3 days; the product has at least one
+        fast = lambda x: [o for o in us_offers(values, x) if values.delivery_days.get(o, 99) <= 3 and o in values.valid_to]
+        for product in shuffled([x for x in values.sold if fast(x)])[:limit]:
+            yield {"Product": product, "Country": values.us,
+                   "currentDate": current_date(values, fast(product), fast(product), rng)}
+    elif query == "q15":
+        pairs = shuffled([(shop, x) for shop in values.shops for x in values.offers_at[shop] if values.review_count[x] >= 25])
+        for shop, product in pairs[:limit]:
+            yield {"Shop": values.endpoint_of(shop), "Product": product}
     elif query == "q08":
         pool = [x for x in values.reviewed if lo <= values.english_count[x] <= hi and len(values.review_sites[x]) >= 3]
         for product in shuffled(pool)[:limit]:

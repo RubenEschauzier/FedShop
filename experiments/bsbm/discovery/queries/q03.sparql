@@ -15,9 +15,13 @@ SELECT DISTINCT ?product ?label WHERE {
     ?product rdfs:label ?label .
     ?product rdf:type <{{ProductType}}> .
     ?product bsbm:productPropertyNumeric1 ?p1 .
+
     FILTER (?p1 > {{x}})
+
     ?product bsbm:productPropertyNumeric3 ?p3 .
+
     FILTER (?p3 < {{y}})
+    
     OPTIONAL {
         ?product bsbm:productFeature <{{ProductFeature}}> .
         ?product rdfs:label ?testVar .

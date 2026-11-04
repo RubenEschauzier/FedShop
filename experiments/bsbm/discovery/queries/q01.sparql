@@ -12,10 +12,13 @@ PREFIX fs: <http://fedshop.example.org/vocab#>
 # rows: 20-300
 # discovered: 2
 SELECT DISTINCT ?product ?label WHERE {
-    ?product rdf:type <{{ProductType}}> .
-    ?product bsbm:productPropertyNumeric1 ?value1 .
-    FILTER (?value1 > {{x}})
     ?product rdfs:label ?label .
+
+    ?product rdf:type <{{ProductType}}> .
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
+
+    ?product bsbm:productPropertyNumeric1 ?value1 .
+    FILTER (?value1 > {{x}})
+
 }
