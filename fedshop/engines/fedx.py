@@ -205,10 +205,11 @@ def transform_provenance(infile, outfile, composition_file):
         max_length = in_df["source_selection"].apply(len).max()
         #in_df["source_selection"] = in_df["source_selection"].apply(pad)
                 
-        out_df = in_df.set_index("tp_name")["source_selection"] \
-            .to_frame().T \
-            .apply(pd.Series.explode) \
-            .reset_index(drop=True) 
+        # One column per triple pattern; shorter columns are padded with NaN, which metrics ignore (nunique)
+        out_df = pd.DataFrame({
+            tp_name: pd.Series(sources, dtype=object)
+            for tp_name, sources in zip(in_df["tp_name"], in_df["source_selection"])
+        })
         out_df.to_csv(outfile, index=False)
 
 @cli.command()

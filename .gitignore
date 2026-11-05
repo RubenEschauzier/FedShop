@@ -166,3 +166,5 @@ experiments/**/stats/*.stat
 apache-jena-fuseki-5.0.0/
 .idea/
 virtuoso/
+# Discovery benchmark: CSS and rdf-dataset-fragmenter
+experiments/bsbm/discovery/tools/*/node_modules/

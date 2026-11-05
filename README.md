@@ -27,33 +27,30 @@ You can set up a local environment with [uv](https://docs.astral.sh/uv/), which 
 uv sync
 # Install NLTK data
 uv run python -m nltk.downloader stopwords punkt
-# Build WatDiv
-cd generators/watdiv && make rebuild && make install
+# Build WatDiv (works with Boost >= 1.83; no `make install` or root needed)
+scripts/build-watdiv.sh
 ```
 
-`uv sync` only manages the Python dependencies; `boost` and `openjdk` (required to build WatDiv and to run Virtuoso/Java-based engines) still need to be installed on your system separately (or use the Conda environment below, which provides them).
+`uv sync` only manages the Python dependencies. You also need, installed on your system:
+- `boost` (to build WatDiv) and Docker with `docker compose` (Virtuoso, the proxy, Jena);
+- Maven and a JDK for the Java engines: FedX builds with JDK 11 or newer, FedUP (used by RSA) needs JDK 21. Point `JAVA_HOME` at it when running `evaluate`.
 
-Once synced, the `fedshop` CLI is available as a shortcut:
+Once synced, the `fedshop` CLI is available as a shortcut. A full run is four steps; `ingest` loads the generated data into one Virtuoso container per batch and must run before query generation:
 
 ```bash
-uv run fedshop generate data|queries experiments/bsbm/snakefile/config.yaml [OPTIONS]
-uv run fedshop evaluate experiments/bsbm/snakefile/config.yaml [OPTIONS]
+uv run fedshop generate data experiments/bsbm/snakefile/config.yaml [OPTIONS]
+uv run fedshop ingest experiments/bsbm/snakefile/config.yaml
+uv run fedshop generate queries experiments/bsbm/snakefile/config.yaml [OPTIONS]
+uv run fedshop evaluate experiments/bsbm/snakefile/config.yaml [OPTIONS]   # e.g. --config="engine=fedx"
 uv run fedshop --help
 ```
 
+Query constants are picked on batch 0 by default. `--config="value_selection_batch=<k>"` picks them on batch k instead; the instances then only need results on batch k.
+
 Every other CLI in the codebase (`fedshop/query.py`, `fedshop/metrics.py`, `fedshop/virtuoso.py`, `fedshop/generate.py`, and each `fedshop/engines/*.py`) is registered the same way, e.g. `uv run fedshop-query --help` or `uv run fedshop-engine-fedx --help`; see [`pyproject.toml`](pyproject.toml) for the full list. Internally, Snakemake rules invoke these as modules, e.g. `python -m fedshop.query ...` or `python -m fedshop.engines.fedx ...`.
 
-### Using Conda
-You can create a Conda environment with all the necessary dependencies:
-
-```bash
-conda env create -f environment.yml
-conda activate fedshop
-# Install NLTK data
-python -m nltk.downloader stopwords punkt
-# Build WatDiv
-cd generators/watdiv && make rebuild && make install
-```
+### Discovery-based variant
+[`experiments/bsbm/discovery/`](experiments/bsbm/discovery/README.md) turns part of the federation into discoverable pods (documents, a pod root naming the member's SPARQL endpoint, and pages for the global BSBM IRIs), and selects query instances that need them. It is driven by `uv run fedshop-discovery`.
 
 FedShop has been published in ISWC2023 as a resource paper:
 - Dang, M. H., Aimonier-Davat, J., Molli, P., Hartig, O., Skaf-Molli, H., & Le Crom, Y. (2023, October). FedShop: A Benchmark for Testing the Scalability of SPARQL Federation Engines. In International Semantic Web Conference (pp. 285-301). Cham: Springer Nature Switzerland.
@@ -91,7 +88,7 @@ A first evaluation of existing SPARQL Federation engines on **FedShop200** compu
 
 The FedShop Data Generator is defined as three  [WatDiv](https://dsg.uwaterloo.ca/watdiv/) template models in [experiments/bsbm/model](experiments/bsbm/model/). These models follow the [BSBM](http://wbsg.informatik.uni-mannheim.de/bizer/berlinsparqlbenchmark/) specification as closely as possible. Using WatDiv models allows changing the schema easily through the configuration file [`experiments/bsbm/snakefile/config.yaml`](experiments/bsbm/snakefile/config.yaml).
 
-Most of the parameters of FedShop are set in [`experiments/bsbm/snakemake/config.yaml`](experiments/bsbm/snakemake/config.yaml). It includes the number of products to generate, the number of vendors and rating sites. 
+Most of the parameters of FedShop are set in [`experiments/bsbm/snakefile/config.yaml`](experiments/bsbm/snakefile/config.yaml). It includes the number of products to generate, the number of vendors and rating sites. 
 
 Basic statistics about the default configuration of FedShop are available in the [jupyter notebook](Realistic_Synthetic_Federated.ipynb)
 
@@ -134,7 +131,7 @@ the engine to be tested must be declared in `experiments/bsbm/snakefile/config.y
 
 The following command allows to launch the evaluation:
 ```bash
-uv run fedshop evaluate experiments/bsbm/snakemake/config.yaml --rerun-incomplete [OPTIONS]
+uv run fedshop evaluate experiments/bsbm/snakefile/config.yaml --rerun-incomplete [OPTIONS]
 
 OPTIONS:
 --clean [benchmark|metrics|instances][+db]: clean the benchmark|metrics|instances then (optional) destroy all database containers
@@ -201,16 +198,16 @@ uv run fedshop evaluate experiments/bsbm/snakefile/config.yaml --clean metrics
 rm -rf .snakemake
 
 # Continue the workflow if interrupted 
-uv run fedshop generate|evaluate experiments/bsbm/snakemake/config.yaml --rerun-incomplete
+uv run fedshop generate|evaluate experiments/bsbm/snakefile/config.yaml --rerun-incomplete
 
 # Delete everything and restart
-uv run fedshop generate|evaluate experiments/bsbm/snakemake/config.yaml --rerun-incomplete --clean all
+uv run fedshop generate|evaluate experiments/bsbm/snakefile/config.yaml --rerun-incomplete --clean all
 
 # Keep the data but remove the intermediary artefacts and db containers.
-uv run fedshop generate data|queries experiments/bsbm/snakemake/config.yaml --rerun-incomplete --clean benchmark+db
+uv run fedshop generate data|queries experiments/bsbm/snakefile/config.yaml --rerun-incomplete --clean benchmark+db
 
 # Only remove the metrics files, applicable when you need to rerun some of the steps
-uv run fedshop generate data|queries experiments/bsbm/snakemake/config.yaml --rerun-incomplete --clean metrics
+uv run fedshop generate data|queries experiments/bsbm/snakefile/config.yaml --rerun-incomplete --clean metrics
 
 ```
 

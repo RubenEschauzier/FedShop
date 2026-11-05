@@ -1,0 +1,19 @@
+PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX fs: <http://fedshop.example.org/vocab#>
+
+# FedShop q10: offers for a product at any shop from vendors in the US, delivered within 3 days and still valid at a date.
+# kind: product
+# rows: 1-10
+# discovered: 1
+SELECT DISTINCT ?offer ?price WHERE {
+    ?offer bsbm:product ?listing .
+    ?listing fs:listingOf <{{Product}}> .
+    ?offer bsbm:vendor ?vendor .
+    ?vendor bsbm:country <{{Country}}> .
+    ?offer bsbm:deliveryDays ?deliveryDays .
+    FILTER (?deliveryDays <= 3)
+    ?offer bsbm:price ?price .
+    ?offer bsbm:validTo ?date .
+    FILTER (?date > "{{currentDate}}"^^xsd:dateTime)
+}

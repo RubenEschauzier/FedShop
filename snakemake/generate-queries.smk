@@ -56,6 +56,10 @@ N_QUERY_INSTANCES = CONFIG_GEN["n_query_instances"]
 VERBOSE = CONFIG_GEN["verbose"]
 N_BATCH = CONFIG_GEN["n_batch"]
 
+# Batch whose federation is used to pick the query constants (FedShop default: batch 0).
+# Instances are only required to return results on that batch; smaller batches may legitimately return nothing.
+VALUE_SELECTION_BATCH = int(config.get("value_selection_batch", CONFIG_GEN.get("value_selection_batch", 0)))
+
 QUERY_DIR = f"{WORK_DIR}/queries"
 MODEL_DIR = f"{WORK_DIR}/model"
 BENCH_DIR = f"{WORK_DIR}/benchmark/generation"
@@ -137,7 +141,8 @@ rule execute_instances:
         composition_file = f"{Path(str(input)).parent}/composition.json"
         if not os.path.exists(composition_file):
             shell("python -m fedshop.query decompose-query {input} {composition_file}")
-        shell("python -m fedshop.query execute-query {params.endpoint_batch0} --queryfile={input} --outfile={output}")
+        ignore_empty = "--ignore-errors" if int(wildcards.batch_id) < VALUE_SELECTION_BATCH else ""
+        shell("python -m fedshop.query execute-query {params.endpoint_batch0} --queryfile={input} --outfile={output} {ignore_empty}")
 
 rule instanciate_workload:
     threads: 1
@@ -159,7 +164,7 @@ rule create_workload_value_selection:
     params:
         n_query_instances = N_QUERY_INSTANCES,
     run:
-        SPARQL_CONTAINER_NAME = f"docker-{SPARQL_SERVICE_NAME}-1"
+        SPARQL_CONTAINER_NAME = f"docker-{SPARQL_SERVICE_NAME}-{VALUE_SELECTION_BATCH+1}"
         if USE_DOCKER :
             if not docker_check_container_running(SPARQL_CONTAINER_NAME):
                 shell(f'docker compose -f {SPARQL_COMPOSE_FILE} stop')

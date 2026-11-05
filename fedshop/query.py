@@ -640,6 +640,7 @@ def create_workload_value_selection(ctx: click.Context, configfile, constfile, s
         
     b_require_exclusive = False
     exclusive_sq = None
+    exclusive_sq_value_selection_file = None
 
     for subq_id, subq_info in subqueries.items():
         subq_kind = subq_info["kind"]
@@ -660,7 +661,8 @@ def create_workload_value_selection(ctx: click.Context, configfile, constfile, s
         if subq_kind == "exclusive":
             b_require_exclusive = True
             exclusive_sq = subq_text
-                
+            exclusive_sq_value_selection_file = subq_value_selection_file
+
     # Update subqueries file
     with open(subqueryfile, "w") as sqfs:
         json.dump(subqueries, sqfs)
@@ -671,7 +673,7 @@ def create_workload_value_selection(ctx: click.Context, configfile, constfile, s
             create_workload_value_selection_with_exclusive,
             configfile=configfile,
             querydata=exclusive_sq,
-            excl_value_selection=subq_value_selection_file,
+            excl_value_selection=exclusive_sq_value_selection_file,
             subqueries_file=subqueryfile,
             n_instances=n_instances,
             workload_value_selection=workload_value_selection,
@@ -709,9 +711,10 @@ def create_workload_value_selection_with_exclusive(ctx: click.Context, configfil
         comp = json.load(cfs)
     
     # Obtain the rest of the placeholders using VALUES
+    # Shuffle all candidates: some may not admit values for the remaining placeholders and are skipped below
     workload_subq_value_selection = (
         read_csv(excl_value_selection)
-        .sample(n_instances, random_state=seed)
+        .sample(frac=1, random_state=seed)
         .reset_index(drop=True)
     )
         
@@ -733,9 +736,13 @@ def create_workload_value_selection_with_exclusive(ctx: click.Context, configfil
                 filter_consts.remove(const)
     
     tmp_dfs = []
-    for instance_id in tqdm(range(n_instances)):
-        tmp_query_algebra, options = ctx.invoke(parse_query, queryfile=queryfile, querydata=querydata)  
-        inline_data = workload_subq_value_selection.iloc[instance_id]
+    pbar = tqdm(total=n_instances)
+    for candidate_id in range(len(workload_subq_value_selection)):
+        if len(tmp_dfs) == n_instances:
+            break
+        instance_id = len(tmp_dfs)
+        tmp_query_algebra, options = ctx.invoke(parse_query, queryfile=queryfile, querydata=querydata)
+        inline_data = workload_subq_value_selection.iloc[candidate_id]
         if isinstance(inline_data, pd.Series):
             inline_data = inline_data.to_frame().T
         inline_data = inline_data.to_dict(orient="list")
@@ -753,16 +760,26 @@ def create_workload_value_selection_with_exclusive(ctx: click.Context, configfil
             endpoint=batch0_endpoint, 
         )        
         
-        tmp_df: pd.DataFrame = ctx.invoke(
-            create_workload_value_selection_with_constraints, 
-            value_selection_data=tmp_query_result, 
-            n_instances=1, 
-            seed=PANDAS_RANDOM_STATE+instance_id,
-            constfile=constfile
-        )
-        
+        # e.g. q07: the product has no US offer, so ?date is unbound and ?currentDate cannot be chosen
+        try:
+            tmp_df: pd.DataFrame = ctx.invoke(
+                create_workload_value_selection_with_constraints,
+                value_selection_data=tmp_query_result,
+                n_instances=1,
+                seed=PANDAS_RANDOM_STATE+instance_id,
+                constfile=constfile
+            )
+        except ValueError as e:
+            logger.debug(f"Skipping candidate {inline_data}: {e}")
+            continue
+
         tmp_dfs.append(tmp_df)
-        
+        pbar.update(1)
+    pbar.close()
+
+    if len(tmp_dfs) < n_instances:
+        raise RuntimeError(f"Only {len(tmp_dfs)}/{n_instances} candidates in {excl_value_selection} admit values for all placeholders!")
+
     workload_subq_value_selection = pd.concat(tmp_dfs, ignore_index=True)
     workload_subq_value_selection.to_csv(workload_value_selection, index=False)
     return workload_subq_value_selection
@@ -897,6 +914,9 @@ def create_workload_value_selection_with_constraints(ctx: click.Context, value_s
         left, op, right = placeholder_query["left"]["column_name"], placeholder_query["op"]["op"], placeholder_query["right"]["column_name"]
         
         def estimate_replacement_value_based_on_op(op, value):
+            """Return a bound b such that any candidate c with `c op b` also satisfies `c op value` strictly,
+            so that the instantiated (often strict) FILTER still holds for the sampled row.
+            """
             epsilon = None
             if str(value).isnumeric():
                 epsilon = 1
@@ -908,30 +928,47 @@ def create_workload_value_selection_with_constraints(ctx: click.Context, value_s
             if op in ["=", "!=", "in"]:
                 return value
             elif op in [">", ">="]:
-                return value - epsilon
-            elif op in ["<", "<="]:
                 return value + epsilon
+            elif op in ["<", "<="]:
+                return value - epsilon
             else:
                 raise ValueError(f"Unsupported operator: {op}")
-        
+
+        def sample_placeholder_value(col, op, value):
+            """Sample a value c in df[col] such that `c op value` holds.
+            If none exists (e.g. the row holds the smallest value), fall back to the bound itself.
+            For `in`, c is a random non-stopword token of value (e.g. `word1` in `label`).
+            """
+            if op == "in":
+                words = [ w for w in tokenizer.tokenize(str(value)) if w.lower() not in stopwords ]
+                if len(words) == 0:
+                    raise ValueError(f"No non-stopword token in {repr(value)}!")
+                return pd.Series(words).sample(1, random_state=seed).item()
+
+            bound = estimate_replacement_value_based_on_op(op, value)
+            subq = f"{col} {op} {repr(bound)}"
+            logger.debug(f"subq: {subq}")
+            candidates = df.query(subq)[col]
+            if not candidates.empty:
+                return candidates.sample(1, random_state=seed).item()
+            if op in ["<", "<=", ">", ">="]:
+                logger.debug(f"Query {subq} returns no result, falling back to {repr(bound)}")
+                return bound
+            raise ValueError(f"Query {subq} returns no result!")
+
+        # Mirror of op, i.e. `a op b` <=> `b flip_op[op] a`
+        flip_op = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "=": "=", "!=": "!=", "in": "in"}
+
         # Left is the placeholder, select random value in df[right]
         # x < p1
         if left not in df.columns:
             logger.debug(f"Row: {row}")
-            subq = f"{right} {op} {repr(estimate_replacement_value_based_on_op(op, row[right]))}" 
-            logger.debug(f"subq: {subq}")
-            candidates = df.query(subq)[right]
-            if candidates.empty:
-                raise ValueError(f"Query {subq} returns no result!")
-            row[left] = candidates.sample(1, random_state=seed).item()
-        
+            row[left] = sample_placeholder_value(right, op, row[right])
+
         # Right is the placeholder, select random value in df[left]
+        # p1 < x <=> x > p1
         elif right not in df.columns:
-            subq = f"{left} {op} {repr(estimate_replacement_value_based_on_op(op, row[left]))}" 
-            candidates = df.query(subq)[left]
-            if candidates.empty:
-                raise ValueError(f"Query {subq} returns no result!")
-            row[right] = candidates.sample(1, random_state=seed).item()
+            row[right] = sample_placeholder_value(left, flip_op[op], row[left])
                 
         return row
                     

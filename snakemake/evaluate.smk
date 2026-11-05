@@ -167,7 +167,7 @@ rule transform_results:
         # Transform results
         shell("python -m fedshop.engines.{wildcards.engine} transform-results {input} {output}")
         if os.stat(str(output)).st_size > 0:
-            expected_results = pd.read_csv(f"{WORK_DIR}/benchmark/generation/{wildcards.query}/instance_{wildcards.instance_id}/batch_{wildcards.batch_id}/results.csv").dropna(how="all", axis=1)
+            expected_results = pd.read_csv(f"{WORK_DIR}/benchmark/generation/{wildcards.query}/instance_{wildcards.instance_id}/results-batch{wildcards.batch_id}.csv").dropna(how="all", axis=1)
             expected_results = expected_results.reindex(sorted(expected_results.columns), axis=1)
             expected_results = expected_results \
                 .sort_values(expected_results.columns.to_list()) \
@@ -218,10 +218,11 @@ rule evaluate_engines:
                     time.sleep(1)
 
             if not docker_check_container_running(PROXY_CONTAINER_NAME):
-                shell(f'docker compose -f {PROXY_COMPOSE_FILE} stop')
-                shell(f"docker start {PROXY_CONTAINER_NAME}")
-                while not ping(PROXY_SPARQL_ENDPOINT):
-                    LOGGER.debug(f"Waiting for {PROXY_SPARQL_ENDPOINT} to start...")
+                # `up` also creates the container on first run, `start` only restarts an existing one
+                shell(f'docker compose -f {PROXY_COMPOSE_FILE} up -d {PROXY_SERVICE_NAME}')
+                # A bare GET on /sparql hangs on the proxy, /reset answers immediately
+                while not ping(PROXY_SERVER + "reset"):
+                    LOGGER.debug(f"Waiting for {PROXY_SERVER} to start...")
                     time.sleep(1)
         
 
