@@ -1,6 +1,5 @@
 // Counting reverse proxy in front of the benchmark's documents (Solid server) and query services
-// (Virtuoso). Engines only see the public ports, so every engine's requests are counted the same way.
-//
+// (Virtuoso).
 // Usage: node proxy.js <map.json> [request-log.jsonl]
 //
 // map.json (written by `fedshop-discovery serve`, or from serving.json by the jbr experiment):
@@ -10,22 +9,6 @@
 //   publishers: {name: {kind, known}}              every publisher, and whether it is known up front
 //   control_port                                   control API
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
-//
-// Every request is counted by source and by kind:
-//   source: "known" (a publisher in the known set: by default the known publishers), "discovered"
-//           (any other publisher) or "other" (no publisher: the server root, unknown paths)
-//   kind:   "document", "storage-root" (/<publisher>/), "container" (another path ending in /),
-//           "server-root" (/) or "sparql" (a query service)
-//
-// CPU and memory of every component (the Virtuoso containers by their cgroup, the Solid server by
-// its process, and the proxy itself), per reset:
-//   cpu_seconds, cpu_percent.avg  exact: the CPU counters are read at the reset and at /stats
-//                                 (cgroup usage_usec, the sum of the process's threads' schedstat)
-//   cpu_percent.min/max           over the sampling intervals (sample_ms), and the last one up to /stats
-//   memory_bytes min/max/avg      over the samples, including one at the reset and one at /stats;
-//                                 a container's memory is memory.current - inactive_file (as docker
-//                                 stats reports it), a process's its resident set
-//   100% CPU is one core. A peak shorter than sample_ms can be missed by min/max, never by the totals.
 //
 // Control API on control_port:
 //   GET  /stats            the counts and resources since the last reset (?samples=1 adds every sample)

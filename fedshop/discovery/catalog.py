@@ -145,7 +145,7 @@ class Catalog:
                 self.brand_of[number] = brand
             start += size
         n_services = max(1, round(float(conf["service_share"]) * self.count))
-        self.services = set(range(n_services))          # the largest brands
+        self.services = set(range(n_services))
         self.dir = Path(watdiv_dir(dconf))
 
     def product(self, number):
