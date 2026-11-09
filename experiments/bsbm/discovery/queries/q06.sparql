@@ -16,7 +16,9 @@ SELECT DISTINCT ?product ?label ?price WHERE {
         ?listing fs:listingOf ?product .
         ?offer bsbm:product ?listing .
         ?offer bsbm:price ?price .
+        ?offer bsbm:vendor ?vendor .
     }
     ?product rdfs:label ?label .
+    ?product bsbm:producer ?brand .
     FILTER regex(?label, "{{word}}", "i")
 }

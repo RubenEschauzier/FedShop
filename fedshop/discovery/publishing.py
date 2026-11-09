@@ -10,12 +10,23 @@ type it deals with, linked to a global BSBM IRI with owl:sameAs. Here each is de
 - a reviewer publishes their profile (moved out of the review site), which lists the reviews they
   wrote with `foaf:made`, at whichever review site.
 
-An entity's IRI is the URL of the document that describes it plus `#it` (<base>vendor13/Offer7#it in
+An entity's IRI is the URL of the document that describes it plus a fragment (<base>vendor13/Offer7#it in
 document <base>vendor13/Offer7), so what a server says about the document (its size, its type,
 when it changed) is not about the entity. Countries keep their hash IRIs in one document
-(<base>taxonomy/countries#ES). Shops and review sites with product pages (layout.py) describe their
-offers and reviews in their listings instead (<base>vendor13/Product42#Offer7); every offer and review
-states its identifier (`dcterms:identifier "Offer7"`) for that.
+(<base>taxonomy/countries#ES). Publishers can group entities into fewer documents (layout.py):
+- shops and review sites with product pages describe their offers and reviews in their listings
+  (<base>vendor13/Product42#Offer7); every offer and review states its identifier
+  (`dcterms:identifier "Offer7"`) for that;
+- review sites by day describe their reviews in a document per review date
+  (<base>ratingsite2/reviews/2007-03-05#Review9);
+- brands by month describe their products in a document per publish month
+  (<base>producer22/products/2005-06#Product77).
+
+Every publisher's own record (a brand's, shop's or review site's record, a reviewer's profile) names its
+storage with `pim:storage`, as a WebID profile does, and the storage root lists every document
+(ldp:contains). So reaching a publisher's record makes all of its documents reachable, and the
+query templates reach the records of the entities they use (`bsbm:producer`, `bsbm:vendor`,
+`dc:publisher`, `rev:reviewer`).
 
 A listing (or review page) keeps FedShop's local product IRI but no longer repeats the product:
 it says `fs:listingOf <brand product>`. Offers and reviews point to the listing, as in FedShop.
@@ -31,11 +42,11 @@ in a second document of the same publisher, so the data behind the services does
 - a listing's document repeats `<offer> bsbm:product <listing>` of each of its offers, and a
   review page's document `<review> bsbm:reviewFor <page>` of each of its reviews (not with product
   pages, where the listing holds its offers or reviews);
-- a brand has a category page per product type it makes (<brand>/types/ProductTypeN) repeating
-  `<product> rdf:type <type>` of its products of that type, and the taxonomy's type links to the
-  brands' pages with rdfs:seeAlso (these links are the taxonomy's own triples).
 - a brand's own record (<brand>/ProducerN) repeats `<product> bsbm:producer <record>` of each of
   its products, as a brand's catalog page lists its range.
+
+The taxonomy's product type links with rdfs:seeAlso to the records of the brands that make it (these
+links are the taxonomy's own triples).
 
 Everything is written as one N-Triples file per publisher, with the IRIs the documents are served
 at (after the layout): data/known/ (the taxonomy, shops/, review-sites/) and data/discoverable/
@@ -52,8 +63,8 @@ from pathlib import Path
 
 from . import layout
 from .catalog import Catalog
-from .common import (BSBM, COUNTRIES, DCTERMS_IDENTIFIER, FS, LOGGER, OWL_SAMEAS, RDF_TYPE, RDFS_LABEL, SEEALSO,
-                     graph_file, graph_order, read_nquads)
+from .common import (BSBM, COUNTRIES, DCTERMS_IDENTIFIER, FS, LOGGER, OWL_SAMEAS, PIM_STORAGE_OF, RDF_TYPE,
+                     RDFS_LABEL, SEEALSO, graph_file, graph_order, read_nquads)
 
 FEDSHOP_MEMBER = re.compile(r"^http://www\.((?:vendor|ratingsite)\d+)\.fr/(.*)$")
 GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
@@ -70,6 +81,8 @@ DIRECTIONS = {  # (from kind, to kind) -> links setting
 }
 XSD = "http://www.w3.org/2001/XMLSchema#"
 DATE_ONLY = re.compile(r'^"(\d{4}-\d{2}-\d{2})"\^\^<' + re.escape(XSD) + r'dateTime>$')
+DATE = re.compile(r'^"(\d{4}-\d{2}-\d{2})')
+RECORD_TYPES = {f"<{BSBM}{kind}>" for kind in ("Producer", "Vendor", "RatingSite", "Person")}   # a publisher's own record
 DOUBLE = re.compile(r'^"([^"]*)"\^\^<' + re.escape(XSD) + r'double>$')
 
 
@@ -125,16 +138,32 @@ def choose_known(dconf, names):
     return sorted(chosen, key=lambda n: (kind_of(n), number(n)))
 
 
-def choose_product_pages(dconf, names, known):
-    """Shops and review sites with product pages, stratified over both kinds and over known or not."""
-    rng = random.Random(dconf.layout_conf.get("seed", 42))
-    share = float(dconf.layout_conf.get("product_pages", 0.5))
-    chosen = []
-    for kind in ("vendor", "ratingsite"):
+def choose_layouts(dconf, names, known):
+    """Each shop's and review site's layout (layout.py): the shares of `layout.shops` and
+    `layout.review_sites`, stratified over known or not; the rest a document per offer or review."""
+    conf = dconf.layout_conf
+    if "product_pages" in conf:
+        raise ValueError("layout.product_pages is now given per kind: layout.shops.product_pages, "
+                         "layout.review_sites.product_pages")
+    rng = random.Random(conf.get("seed", 42))
+    layouts = {n: layout.PER_RESOURCE for n in names}
+    for kind, key, kinds_layouts in (("vendor", "shops", (layout.PRODUCT_PAGES,)),
+                                     ("ratingsite", "review_sites", (layout.PRODUCT_PAGES, layout.BY_DAY))):
+        shares = dict(conf.get(key) or {})
+        unknown = set(shares) - {name.replace("-", "_") for name in kinds_layouts}
+        if unknown:
+            raise ValueError(f"layout.{key}: unknown layouts {sorted(unknown)}")
+        if sum(float(s) for s in shares.values()) > 1:
+            raise ValueError(f"layout.{key}: the shares add up to more than 1")
         for is_known in (True, False):
-            group = sorted((n for n in names if kind_of(n) == kind and (n in known) == is_known), key=number)
-            chosen += rng.sample(group, round(share * len(group)))
-    return set(chosen)
+            rest = sorted((n for n in names if kind_of(n) == kind and (n in known) == is_known), key=number)
+            size = len(rest)
+            for name in kinds_layouts:
+                count = round(float(shares.get(name.replace("-", "_"), 0)) * size)
+                chosen = rng.sample(rest, min(count, len(rest)))
+                layouts.update((n, name) for n in chosen)
+                rest = [n for n in rest if n not in chosen]
+    return layouts
 
 
 class Publishing:
@@ -147,20 +176,37 @@ class Publishing:
         self.members = sorted(dconf.member_names, key=lambda n: (kind_of(n), number(n)))  # vendorN, ratingsiteN
         self.data = defaultdict(list)          # publisher -> N-Triples lines
         self.placements = []                   # N-Quads lines: a triple and the document it is also placed in
-        self.categories = defaultdict(set)     # type IRI -> brands with a category page for it
+        self.categories = defaultdict(set)     # type IRI -> brands that make it (the taxonomy links to their records)
         self.listings = defaultdict(dict)      # product number -> {publisher: listing IRI}
         self.countries = set()
         self.reviewer_iri = {}                 # (site, local Person name) -> reviewer IRI
         self.reviewers = []
         self.known = set(choose_known(dconf, self.members))
-        self.product_pages = choose_product_pages(dconf, self.members, self.known)
+        self.layouts = choose_layouts(dconf, self.members, self.known)
+        self.product_pages = {m for m, name in self.layouts.items() if name == layout.PRODUCT_PAGES}
+        self.brands_layout = dconf.layout_conf.get("brands", layout.PER_PRODUCT)
+        if self.brands_layout not in (layout.PER_PRODUCT, layout.BY_MONTH):
+            raise ValueError(f"layout.brands: {self.brands_layout!r} is neither {layout.PER_PRODUCT} nor {layout.BY_MONTH}")
+        self.months = {}                       # product number -> publish month (by-month brands)
+        self.review_day = {}                   # (site, local Review name) -> review date (by-day review sites)
 
     # ----- IRIs -----
     def brand_name(self, brand):
         return f"producer{brand}"
 
     def product_iri(self, n):
-        return f"{self.dconf.ns(self.brand_name(self.catalog.brand_of[n]))}Product{n}#it"
+        ns = self.dconf.ns(self.brand_name(self.catalog.brand_of[n]))
+        if self.brands_layout == layout.BY_MONTH:
+            return f"{ns}products/{self.publish_month(n)}#Product{n}"
+        return f"{ns}Product{n}#it"
+
+    def publish_month(self, n):
+        if n not in self.months:
+            dates = [o for _, p, o in self.catalog.product(n) if p == f"<{BSBM}publishDate>"]
+            if len(dates) != 1:
+                raise ValueError(f"Product{n} has {len(dates)} publish dates, not one")
+            self.months[n] = DATE.match(dates[0]).group(1)[:7]
+        return self.months[n]
 
     def producer_iri(self, brand):
         return f"{self.dconf.ns(self.brand_name(brand))}Producer{brand}#it"
@@ -171,6 +217,10 @@ class Publishing:
             member, local = m.groups()
             if local.startswith("Person"):
                 return self.reviewer_iri[(member, local)]
+            if self.layouts.get(member) == layout.BY_DAY and local.startswith("Review"):
+                if (member, local) not in self.review_day:
+                    raise ValueError(f"{member}'s {local} has no review date to group it by")
+                return f"{self.dconf.ns(member)}reviews/{self.review_day[(member, local)]}#{local}"
             return f"{self.dconf.ns(member)}{local}#it"
         if iri.startswith(BSBM):
             g = GLOBAL.match(iri[len(BSBM):])
@@ -209,6 +259,10 @@ class Publishing:
 
     def build_members(self):
         for member in self.members:
+            if self.layouts[member] == layout.BY_DAY:
+                for s, p, o in self.read(member):
+                    if p == f"<{BSBM}reviewDate>":
+                        self.review_day[(member, FEDSHOP_MEMBER.match(s[1:-1]).group(2))] = DATE.match(o).group(1)
             copies = {}
             identified = set()
             for s, p, o in self.read(member):
@@ -273,6 +327,20 @@ class Publishing:
         for code in sorted(self.countries):
             self.data["taxonomy"].append(nt(f"<{self.dconf.ns('taxonomy')}countries#{code}>", f"<{RDFS_LABEL}>", f'"{code}"'))
 
+    def build_storages(self):
+        """Every publisher's own record names its storage: `<record> pim:storage <storage>`, as a WebID
+        profile does. The taxonomy has no record; it is known up front."""
+        for name in [n for n in self.data if n != "taxonomy"]:
+            ns = self.dconf.ns(name)
+            records = set()
+            for line in self.data[name]:
+                s, p, o = line[:-3].split(" ", 2)
+                if p == f"<{RDF_TYPE}>" and o in RECORD_TYPES and s.startswith(f"<{ns}"):
+                    records.add(s)
+            if len(records) != 1:
+                raise ValueError(f"{name} has {len(records)} records of its own, not one: {sorted(records)[:3]}")
+            self.data[name].append(nt(records.pop(), f"<{PIM_STORAGE_OF}>", f"<{ns}>"))
+
     # ----- links -----
     def build_links(self):
         conf = self.dconf.links_conf
@@ -324,15 +392,10 @@ class Publishing:
                 if p == f"<{BSBM}producer>":
                     place(line, doc(o[1:-1]))
                 elif p == f"<{RDF_TYPE}>" and o.startswith(f"<{taxonomy}ProductType"):
-                    place(line, self.category_page(name, o[1:-1]))
                     self.categories[o[1:-1]].add(name)
         for type_iri, brands in sorted(self.categories.items()):
             for name in sorted(brands, key=number):
-                self.data["taxonomy"].append(nt(f"<{type_iri}>", f"<{SEEALSO}>", f"<{self.category_page(name, type_iri)}>"))
-
-    def category_page(self, brand, type_iri):
-        """A brand's page listing its products of a type: <brand>/types/ProductTypeN (a document)."""
-        return f"{self.dconf.ns(brand)}types/{doc(type_iri)[len(self.dconf.ns('taxonomy')):]}"
+                self.data["taxonomy"].append(nt(f"<{type_iri}>", f"<{SEEALSO}>", f"<{doc(self.producer_iri(number(name)))}>"))
 
     # ----- publishers.json -----
     def publishers(self):
@@ -341,12 +404,11 @@ class Publishing:
         dconf = self.dconf
         publishers = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
         for m in self.members:
-            publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": True,
-                             "layout": layout.PRODUCT_PAGES if m in self.product_pages else layout.PER_RESOURCE}
+            publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": True, "layout": self.layouts[m]}
         for brand in range(self.catalog.count):
             publishers[self.brand_name(brand)] = {"kind": "producer", "known": False,
                                               "service": brand in self.catalog.services,
-                                              "products": self.catalog.sizes[brand]}
+                                              "products": self.catalog.sizes[brand], "layout": self.brands_layout}
         for r in self.reviewers:
             publishers[r] = {"kind": "reviewer", "known": False, "service": False}
         port = int(dconf.virtuoso["first_service_port"])
@@ -368,6 +430,7 @@ class Publishing:
         self.build_taxonomy()
         self.build_links()
         self.build_placements()
+        self.build_storages()
         return self.publishers()
 
 
@@ -401,10 +464,11 @@ def run(dconf):
         k["publishers"] += 1
         k["known"] += info["known"]
         k["services"] += info["service"]
-        k["product_pages"] += info.get("layout") == layout.PRODUCT_PAGES
+        if info.get("layout"):
+            k[info["layout"]] += 1
         k["triples"] += info["triples"]
     summary = {"publishers": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in pub.listings.values()), "listed_products": len(pub.listings),
-               "links": len(pub.links), "placed_triples": len(pub.placements), "category_pages": sum(len(b) for b in pub.categories.values())}
+               "links": len(pub.links), "placed_triples": len(pub.placements), "type_brand_links": sum(len(b) for b in pub.categories.values())}
     LOGGER.info(json.dumps(summary))
     return summary

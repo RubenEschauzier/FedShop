@@ -53,7 +53,6 @@ def template_meta(text):
     return {"kind": meta.get("kind", "product"), "rows": (lo, hi), "discovered": int(meta.get("discovered", 1))}
 
 
-# ----- values -----
 class Values:
     """What the templates' values are drawn from, read from the publishers' graphs."""
 
@@ -356,11 +355,10 @@ def reference_query(text, services):
     return "\n".join(prefix_lines) + f"\n{select} WHERE {{\n{{ {inner} }}\n}}\n{modifiers}\n"
 
 
-# ----- plain forms -----
 def plain_query(text):
-    """The query without its SERVICE clauses: their patterns stay, as a plain group."""
+    """The query without its SERVICE clauses: their patterns stay, as a plain group, one level less indented."""
     lines = text.splitlines()
-    drop, i = set(), 0
+    drop, dedent, i = set(), set(), 0
     while i < len(lines):
         if re.match(r"^\s*SERVICE\s*<[^>]+>\s*\{\s*$", lines[i], re.I):
             depth, j = 1, i + 1
@@ -369,10 +367,12 @@ def plain_query(text):
                 depth += t.endswith("{") - t.startswith("}")
                 j += 1
             drop |= {i, j - 1}
+            dedent |= set(range(i + 1, j - 1))
             i = j
         else:
             i += 1
-    return "\n".join(l for k, l in enumerate(lines) if k not in drop) + "\n"
+    unindent = lambda l: l[4:] if l.startswith("    ") else l
+    return "\n".join(unindent(l) if k in dedent else l for k, l in enumerate(lines) if k not in drop) + "\n"
 
 
 def write_plain(dconf, inst, services):

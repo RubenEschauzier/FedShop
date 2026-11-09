@@ -12,9 +12,11 @@ PREFIX fs: <http://fedshop.example.org/vocab#>
 # rows: 10-150
 # discovered: 3
 SELECT DISTINCT ?title ?text ?reviewDate ?reviewer ?reviewerName ?rating1 ?rating2 ?rating3 ?rating4 WHERE {
+    <{{Product}}> bsbm:producer ?brand .
     ?page fs:listingOf <{{Product}}> .
     ?review bsbm:reviewFor ?page .
     ?review dc:title ?title .
+    ?review dc:publisher ?site .
     ?review rev:text ?text .
     FILTER (langMatches(lang(?text), "en"))
     ?review bsbm:reviewDate ?reviewDate .

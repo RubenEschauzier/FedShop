@@ -236,14 +236,26 @@ function forward(req, res, upstream, entry, stats) {
     up.on("data", (chunk) => { bytes += chunk.length; });
     up.on("end", () => done(up.statusCode, bytes));
     up.on("error", () => done(502, bytes));
+    // An upstream that drops its answer midway would leave the client waiting on the rest of it, which never
+    // comes: the client's connection is cut off as well, so it sees the failure when it happens
+    up.on("close", () => {
+      if (!up.complete) {
+        done(502, bytes);
+        res.destroy();
+      }
+    });
     up.pipe(res);
   });
   outgoing.on("error", () => {
-    if (!res.headersSent) {
-      res.writeHead(502, { "content-type": "text/plain" });
-    }
-    res.end("Bad gateway");
     done(502, 0);
+    // Once the answer has begun, the failure can only be told by cutting it off: appending to it would
+    // hand the client a corrupt answer instead
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end("Bad gateway");
   });
   res.on("close", () => {
     if (!finished) {
@@ -252,6 +264,15 @@ function forward(req, res, upstream, entry, stats) {
     }
   });
   req.pipe(outgoing);
+}
+
+// A server that never closes a client's connection itself. Node's default does so 5 s after it has handed
+// the last byte of an answer to the kernel, which can be before the client has read it: a client still reading
+// a large answer then has it cut off. The client closes the connections it no longer needs instead.
+function createServer(handler) {
+  const server = http.createServer(handler);
+  server.keepAliveTimeout = 0;
+  return server;
 }
 
 // One upstream per server: the Solid server, and the first service on every Virtuoso host.
@@ -291,7 +312,7 @@ function main(mapPath, logPath) {
     port: map.documents.target,
     agent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
   };
-  http.createServer((req, res) => {
+  createServer((req, res) => {
     const pathname = new URL(req.url, "http://x").pathname;
     const publisher = decodeURIComponent(pathname.split("/").filter(Boolean)[0] || "") || null;
     const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher,
@@ -308,14 +329,14 @@ function main(mapPath, logPath) {
       // Virtuoso's endpoints are defined on their own ports
       hostHeader: `localhost:${service.target}`,
     };
-    http.createServer((req, res) => {
+    createServer((req, res) => {
       const entry = { method: req.method, url: `http://${req.headers.host}${req.url}`, publisher: service.publisher,
                       kind: "sparql", source: stats.source(service.publisher) };
       forward(req, res, upstream, entry, stats);
     }).listen(service.port);
   }
 
-  http.createServer((req, res) => {
+  createServer((req, res) => {
     const reply = (status, body) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body, null, 2));

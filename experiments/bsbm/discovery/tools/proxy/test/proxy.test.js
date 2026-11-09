@@ -169,6 +169,13 @@ before(async () => {
       setTimeout(() => res.end("slow"), 2000);
       return;
     }
+    if (req.url.endsWith("/drop")) {
+      // Drops its answer midway, as a server that fails under load does
+      res.writeHead(200, { "content-length": 1000 });
+      res.write("partial");
+      setTimeout(() => req.socket.destroy(), 50);
+      return;
+    }
     if (req.url.endsWith("/fail")) {
       res.writeHead(500);
       res.end("fail");
@@ -381,6 +388,50 @@ test("a client that gives up on a query service holds up no later request", asyn
   assert.deepEqual([answer.status, answer.body], [200, `sparql:localhost:${services.vendor2.port}`]);
   await wait(50);
   assert.deepEqual(logEntries("abandoned").map((e) => e.status).sort(), [200, 499, 499, 499]);
+});
+
+test("an upstream that drops its answer midway cuts off the client's answer too, at once", async () => {
+  await control("POST", "/reset", JSON.stringify({ label: "dropped" }));
+  const began = Date.now();
+  const outcome = await new Promise((resolve) => {
+    const req = http.request({ host: "localhost", port: ports.documents, path: "/vendor2/drop", agent: false }, (res) => {
+      res.on("data", () => {});
+      res.on("end", () => resolve("ended"));
+      res.on("error", () => resolve("cut off"));
+      res.on("aborted", () => resolve("cut off"));
+    });
+    req.on("error", () => resolve("cut off"));
+    req.end();
+  });
+  assert.equal(outcome, "cut off");
+  assert.ok(Date.now() - began < 1000, `the client waited ${Date.now() - began} ms`);
+  await wait(50);
+  assert.deepEqual(logEntries("dropped").map((e) => e.status), [502]);
+});
+
+// Node's servers close an idle connection 5 s (plus a 1 s margin) after the last byte of an answer left them,
+// which cuts off a client that is still reading a large answer by then
+test("the proxy leaves closing a kept-alive connection to the client", { timeout: 15000 }, async () => {
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    const { headers, socket } = await new Promise((resolve, reject) => {
+      const req = http.request({ host: "localhost", port: ports.documents, path: "/vendor2/doc", agent }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({ headers: res.headers, socket: req.socket }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(headers["keep-alive"], undefined, "the proxy announces a time after which it closes connections");
+    let closed = false;
+    socket.on("close", () => {
+      closed = true;
+    });
+    await wait(6500);
+    assert.equal(closed, false, "the proxy closed the connection");
+  } finally {
+    agent.destroy();
+  }
 });
 
 test("GET /health checks the Solid server and one service per Virtuoso host", async () => {

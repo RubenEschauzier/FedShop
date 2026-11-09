@@ -14,8 +14,10 @@ PREFIX fs: <http://fedshop.example.org/vocab#>
 SELECT DISTINCT ?product ?review ?rating1 WHERE {
     ?product rdf:type <{{ProductType}}> .
     FILTER (?product != <{{Product}}>)
+    ?product bsbm:producer ?brand .
     ?page fs:listingOf ?product .
     ?review bsbm:reviewFor ?page .
     ?review bsbm:rating1 ?rating1 .
+    ?review dc:publisher ?site .
     FILTER (?rating1 >= {{r}})
 }

@@ -141,7 +141,7 @@ class Analyzer:
         for product, publisher, _, peer, _ in links:
             self.adj[product][self.ns[publisher]].add(self.ns[peer])
             self.holders[product] |= {self.ns[publisher], self.ns[peer]}
-        # A type leads to the brands with a category page for it (the taxonomy's seeAlso links).
+        # A type leads to the brands that make it (the taxonomy's seeAlso links to their records).
         categories = Path(dconf.path("categories.json"))
         self.categories = ({t: {self.ns[b] for b in brands} for t, brands in json.loads(categories.read_text()).items()}
                            if categories.exists() else {})

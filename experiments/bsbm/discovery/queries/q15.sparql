@@ -18,9 +18,11 @@ SELECT DISTINCT ?vendor ?review ?reviewerName ?country WHERE {
         ?offer bsbm:vendor ?vendor .
         ?vendor bsbm:country ?country .
     }
+    <{{Product}}> bsbm:producer ?brand .
     ?page fs:listingOf <{{Product}}> .
     ?review bsbm:reviewFor ?page .
     ?review rev:reviewer ?reviewer .
+    ?review dc:publisher ?site .
     ?reviewer bsbm:country ?country .
     ?reviewer foaf:name ?reviewerName .
 }

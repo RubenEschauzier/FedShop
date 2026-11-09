@@ -27,4 +27,6 @@ SELECT DISTINCT ?product ?label ?propertyTextual WHERE {
     }
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
+    ?product bsbm:producer ?brand .
+    ?offer bsbm:vendor ?vendor .
 }

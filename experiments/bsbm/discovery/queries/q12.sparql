@@ -24,4 +24,5 @@ SELECT DISTINCT ?product ?productlabel ?vendorname ?vendorhomepage ?offerURL ?pr
         <{{Offer}}> bsbm:validTo ?validTo .
     }
     ?product rdfs:label ?productlabel .
+    ?product bsbm:producer ?brand .
 }

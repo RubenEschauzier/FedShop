@@ -2,10 +2,12 @@
 
 - The main pass runs the fragmenter's CLI with its subject strategy over every publisher's data: a
   triple goes to the document of its subject (without fragment), so <base>vendor13/Offer7#it is
-  described in <base>vendor13/Offer7 and <base>taxonomy/countries holds all countries. With product
-  pages (layout.py), <base>vendor13/Product42#Offer7 is described in its listing's document.
+  described in <base>vendor13/Offer7 and <base>taxonomy/countries holds all countries. With the
+  other layouts (layout.py), <base>vendor13/Product42#Offer7 is described in its listing's document,
+  <base>ratingsite2/reviews/2007-03-05#Review9 in its day's and <base>producer22/products/2005-06#Product77
+  in its month's.
 - Triples that belong in another document than their subject's (placements.nq: offers in their
-  listing, reviews in their page and products in their brand's category pages, for traversal) are
+  listing, reviews in their page and products in their brand's record, for traversal) are
   placed in one more fragmenter run (tools/fragmenter/place.js).
 - Every publisher's directory is a storage root. Its metadata (.meta, read by CSS) types it as a
   pim:Storage, which CSS advertises with a `Link: <pim:Storage>; rel="type"` header, and, for

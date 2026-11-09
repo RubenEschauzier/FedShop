@@ -33,8 +33,10 @@ COPY fedshop/ fedshop/
 RUN uv sync --frozen --no-dev
 
 COPY experiments/bsbm/ experiments/bsbm/
+# The fragmenter's install scripts only build optional native add-ons (ssh2, cpu-features) it doesn't use,
+# and their node-gyp build can hang fetching Node headers inside the build
 RUN cd experiments/bsbm/discovery/tools/css && npm ci --omit=dev \
-    && cd ../fragmenter && npm ci --omit=dev
+    && cd ../fragmenter && npm ci --omit=dev --ignore-scripts
 
 # The proxy's control port (GET /stats, POST /reset, GET /health)
 EXPOSE 3999

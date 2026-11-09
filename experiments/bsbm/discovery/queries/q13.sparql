@@ -19,4 +19,5 @@ SELECT DISTINCT ?product ?label ?offer ?price WHERE {
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
     ?offer bsbm:price ?price .
+    ?offer bsbm:vendor ?vendor .
 }

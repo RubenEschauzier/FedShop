@@ -9,6 +9,7 @@ PREFIX fs: <http://fedshop.example.org/vocab#>
 SELECT DISTINCT ?offer ?price WHERE {
     ?offer bsbm:product ?listing .
     ?listing fs:listingOf <{{Product}}> .
+    <{{Product}}> bsbm:producer ?brand .
     ?offer bsbm:vendor ?vendor .
     ?vendor bsbm:country <{{Country}}> .
     ?offer bsbm:deliveryDays ?deliveryDays .

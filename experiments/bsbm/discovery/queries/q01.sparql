@@ -17,6 +17,8 @@ SELECT DISTINCT ?product ?label WHERE {
     ?product rdf:type <{{ProductType}}> .
     ?listing fs:listingOf ?product .
     ?offer bsbm:product ?listing .
+    ?product bsbm:producer ?brand .
+    ?offer bsbm:vendor ?vendor .
 
     ?product bsbm:productPropertyNumeric1 ?value1 .
     FILTER (?value1 > {{x}})

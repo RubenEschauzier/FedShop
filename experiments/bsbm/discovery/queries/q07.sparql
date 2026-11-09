@@ -14,6 +14,7 @@ PREFIX fs: <http://fedshop.example.org/vocab#>
 SELECT DISTINCT ?productLabel ?offer ?price ?vendor ?vendorTitle ?review ?revTitle ?reviewer ?revName ?rating1 ?rating2 WHERE {
     <{{Product}}> rdf:type bsbm:Product .
     <{{Product}}> rdfs:label ?productLabel .
+    <{{Product}}> bsbm:producer ?brand .
 
     OPTIONAL {
         SERVICE <{{Shop}}> {
@@ -33,6 +34,7 @@ SELECT DISTINCT ?productLabel ?offer ?price ?vendor ?vendorTitle ?review ?revTit
         ?review rev:reviewer ?reviewer .
         ?reviewer foaf:name ?revName .
         ?review dc:title ?revTitle .
+        ?review dc:publisher ?site .
         OPTIONAL { ?review bsbm:rating1 ?rating1 . }
         OPTIONAL { ?review bsbm:rating2 ?rating2 . }
     }

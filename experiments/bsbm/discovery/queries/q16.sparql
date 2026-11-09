@@ -16,10 +16,13 @@ SELECT DISTINCT ?product ?price ?review ?rating1 WHERE {
         ?listing fs:listingOf ?product .
         ?offer bsbm:product ?listing .
         ?offer bsbm:price ?price .
+        ?offer bsbm:vendor ?vendor .
     }
     ?product rdf:type <{{ProductType}}> .
+    ?product bsbm:producer ?brand .
     ?page fs:listingOf ?product .
     ?review bsbm:reviewFor ?page .
     ?review bsbm:rating1 ?rating1 .
+    ?review dc:publisher ?site .
     FILTER (?rating1 >= {{r}})
 }

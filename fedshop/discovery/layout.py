@@ -1,13 +1,20 @@
-"""How shops and review sites lay out their documents, applied to the graph files before they are loaded.
+"""How publishers group their entities into documents (publishers.json's `layout`).
 
-A shop or review site publishes one of two layouts (publishers.json's `layout`):
+Every layout is a matter of IRIs: an entity's IRI is its document plus a fragment, so the subject
+fragmentation (fragment.py) puts it in that document and its IRI resolves there.
 
-- `per-resource`: a document per offer or review (<base>vendor0/Offer5), next to its listings;
+A shop or review site publishes one of three layouts:
+
+- `per-resource`: a document per offer or review (<base>vendor0/Offer5#it), next to its listings;
 - `product-pages`: a page per product with its offers or reviews in it, as web shops publish product
-  pages. An offer is <listing document>#Offer5 (<base>vendor0/Product125#Offer5), so the subject
-  fragmentation (fragment.py) puts it in its listing's document and its IRI resolves there.
+  pages. An offer is <listing document>#Offer5 (<base>vendor0/Product125#Offer5).
+- `by-day` (review sites): a document per review date, as SolidBench groups messages per day. A review
+  is <base>ratingsite0/reviews/2007-03-05#Review9. Its IRI is minted with the others (publishing.py).
 
-The second layout is a matter of IRIs, rewritten by rdf-dataset-fragmenter's
+A brand publishes `per-product` (<base>producer0/Product7#it) or `by-month`: a document per publish
+month of its products (<base>producer0/products/2005-06#Product7), also minted in publishing.py.
+
+Product pages are rewritten by rdf-dataset-fragmenter's
 QuadTransformerRemapResourceIdentifier from the offer's dcterms:identifier and its bsbm:product (a
 review: bsbm:reviewFor). It rewrites the graph files themselves, so the services, the workload and the
 reference answers use the IRIs the documents use.
@@ -29,6 +36,9 @@ from .fragment import escape_regex
 
 PER_RESOURCE = "per-resource"
 PRODUCT_PAGES = "product-pages"
+BY_DAY = "by-day"
+PER_PRODUCT = "per-product"
+BY_MONTH = "by-month"
 
 
 def remap(type_name, target):

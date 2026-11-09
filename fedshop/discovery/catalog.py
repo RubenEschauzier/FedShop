@@ -16,7 +16,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 - `dconf.configfile`: the FedShop config. Its `generation.schema.{product,vendor,ratingsite}`
   sections give the WatDiv templates and their word counts; the counts below override theirs.
 - `dconf.brands_conf`: `discovery.brands`
-    products       int    products in the catalog, over all brands           200000
+    products       int    products in the catalog, over all brands           40000
     count          int    brands (producers)                                400
     zipf           float  brand size ~ rank^-zipf                           0.8
     min_products   int    products of the smallest brand                    20
@@ -35,6 +35,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 """
 import math
 import random
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -55,7 +56,13 @@ def generate(dconf, force=False):
     Reads dconf.configfile, dconf.brands_conf["products"] and ["count"]; writes <outdir>/catalog/.
     """
     out = Path(watdiv_dir(dconf))
+    if force and out.exists():
+        shutil.rmtree(out)                              # a smaller catalog must not keep the old products
     if out.exists() and any(out.glob("Product/*.nq")) and not force:
+        have, want = sum(1 for _ in out.glob("Product/*.nq")), int(dconf.brands_conf["products"])
+        if have != want:
+            raise ValueError(f"The product catalog in {out} has {have} products, but brands.products is {want}: "
+                             "regenerate it with --force (types and features follow from the catalog size)")
         LOGGER.info(f"Product catalog already generated in {out}")
         return
     conf = load_config(dconf.configfile)

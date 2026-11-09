@@ -21,13 +21,15 @@ SEEALSO = "http://www.w3.org/2000/01/rdf-schema#seeAlso"
 OWL_SAMEAS = "http://www.w3.org/2002/07/owl#sameAs"
 DCTERMS_IDENTIFIER = "http://purl.org/dc/terms/identifier"
 PIM_STORAGE = "http://www.w3.org/ns/pim/space#Storage"
+PIM_STORAGE_OF = "http://www.w3.org/ns/pim/space#storage"   # an agent's storage, as a WebID profile names it
 VOID_ENDPOINT = "http://rdfs.org/ns/void#sparqlEndpoint"
 COUNTRIES = "http://downlode.org/rdf/iso-3166/countries#"
 
 DEFAULTS = {
     "base_url": "http://localhost:3000/",
     "known": {"ratio": 0.5, "seed": 42, "members": None},
-    "layout": {"product_pages": 0.5, "seed": 42},
+    "layout": {"shops": {"product_pages": 0.5}, "review_sites": {"product_pages": 0.5}, "brands": "per-product",
+               "seed": 42},
     "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000, "seed": 42},
     "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",

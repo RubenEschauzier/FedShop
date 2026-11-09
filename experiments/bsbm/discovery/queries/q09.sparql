@@ -15,6 +15,7 @@ SELECT DISTINCT ?title ?reviewer ?name ?country WHERE {
     SERVICE <{{Site}}> {
         <{{Review}}> rev:reviewer ?reviewer .
         <{{Review}}> dc:title ?title .
+        <{{Review}}> dc:publisher ?site .
     }
     ?reviewer foaf:name ?name .
     ?reviewer bsbm:country ?country .
