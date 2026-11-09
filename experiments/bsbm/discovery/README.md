@@ -18,7 +18,7 @@ Every publisher has a storage `<base_url><publisher>/` (`http://localhost:3000/v
 
 An entity's IRI is the URL of its document plus a fragment: the offer `vendor13/Offer7#it` is described in the document `vendor13/Offer7`. What the server says about a document (its type, size, modification date) is then not about the entity. Below, entities are named by their document.
 
-**Every publisher is entered through its own record, as SolidBench's pods are entered through a WebID profile.** A brand's, shop's or review site's record (`producer22/Producer22#it`, `vendor13/Vendor0#it`, `ratingsite2/RatingSite0#it`) and a reviewer's profile (`reviewer7/profile#it`) name the publisher's storage with `pim:storage`, and the storage root lists every document with `ldp:contains`. Every entity points to its publisher's record (`bsbm:producer`, `bsbm:vendor`, `dc:publisher`, `rev:reviewer`), and the query templates follow those links. So a publisher the query reaches is reachable as a whole, by traversal as by its service.
+**Every publisher is entered through its own record** A brand's, shop's or review site's record (`producer22/Producer22#it`, `vendor13/Vendor0#it`, `ratingsite2/RatingSite0#it`) and a reviewer's profile (`reviewer7/profile#it`) name the publisher's storage with `pim:storage`, and the storage root lists every document with `ldp:contains`. Every entity points to its publisher's record (`bsbm:producer`, `bsbm:vendor`, `dc:publisher`, `rev:reviewer`), and the query templates follow those links. So a publisher the query reaches is reachable as a whole, by traversal as by its service.
 
 A publisher groups its entities into documents in one of these ways (`layout`); every IRI still resolves to the document that describes it:
 
