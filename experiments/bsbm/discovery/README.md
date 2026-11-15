@@ -326,7 +326,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **New members.** Brands (400) and a taxonomy, which FedShop doesn't have as members. Reviewers become members of their own.
 - **Own generation.** The benchmark runs FedShop's templates itself, with seeded offer and review counts. Shops and review sites have FedShop's full per-member rates, but there are 20 of each (FedShop's batch 1) instead of FedShop's 100.
 - **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands publish 40,000 products, half of them sold nowhere.
-- **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment.
+- **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment. WatDiv only writes the producer records its own draws use, so a brand without one borrows another's properties.
 - **Links and category pages are new.** FedShop has no links between members and no documents.
 - **IRIs.** All IRIs move under `http://localhost:3000/<publisher>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy. Offers and reviews of product pages become `<listing>#Offer7`.
 - **Identifiers.** Offers and reviews gain `dcterms:identifier` with their FedShop local name.

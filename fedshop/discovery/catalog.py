@@ -161,7 +161,16 @@ class Catalog:
         return list(read_nquads(self.dir / "Product" / f"Product{number}.nq"))
 
     def producer(self, brand):
-        return list(read_nquads(self.dir / "Producer" / f"Producer{brand}.nq"))
+        """The producer record WatDiv wrote for a brand. WatDiv only writes the producers its own draws
+        used (not deterministically), while brands are assigned here: a brand without one borrows the
+        next brand's record (its properties; publishing.py writes them under the brand's own IRI)."""
+        for k in range(self.count):
+            path = self.dir / "Producer" / f"Producer{(brand + k) % self.count}.nq"
+            if path.exists():
+                if k:
+                    LOGGER.warning(f"WatDiv wrote no Producer{brand}: it borrows Producer{(brand + k) % self.count}'s record")
+                return list(read_nquads(path))
+        raise FileNotFoundError(f"No producer records in {self.dir / 'Producer'}")
 
     def taxonomy_files(self):
         for kind in ("ProductType", "ProductFeature"):
