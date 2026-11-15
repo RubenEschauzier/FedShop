@@ -15,7 +15,12 @@
 - Every publisher's directory is a storage root. Its metadata (.meta, read by CSS) types it as a
   pim:Storage, which CSS advertises with a `Link: <pim:Storage>; rel="type"` header, and, for
   publishers with a query service, names that service with void:sparqlEndpoint. CSS lists the root's
-  documents with ldp:contains.
+  documents with ldp:contains. CSS includes these triples in the root's own representation, so a
+  client that fetches the root reads them there; it never needs the .meta itself.
+- With `layout.dataset_links`, the root is also a void:Dataset, and every document links to it:
+  `<vendor13/Product42> void:inDataset <vendor13/>`. A client entering any document then finds the
+  publisher's dataset, and what answers queries over it, through a link in the data, rather than by
+  walking up the url to the root (a Solid convention).
 - The server root itself is not readable (its ACL only grants read access to what is below it),
   so it can't be used as an index of all storages.
 """
@@ -26,6 +31,9 @@ import subprocess
 from pathlib import Path
 
 from .common import LOGGER, PIM_STORAGE, RDF_TYPE, VOID_ENDPOINT
+
+VOID_DATASET = "http://rdfs.org/ns/void#Dataset"
+VOID_IN_DATASET = "http://rdfs.org/ns/void#inDataset"
 
 ACL = "http://www.w3.org/ns/auth/acl#"
 BATCH = 200   # source files per fragmenter run: Components.js reads a longer list recursively and overflows
@@ -88,9 +96,14 @@ def run(dconf, publishers):
     subprocess.run(["node", dconf.tool("fragmenter", "place.js"), str(Path(dconf.path("placements.nq")).resolve()),
                     dconf.base, str(web_dir)], check=True)
 
+    dataset_links = bool(dconf.layout_conf.get("dataset_links"))
+    linked = link_datasets(dconf, publishers, web_dir) if dataset_links else 0
+
     for name, info in publishers.items():
         ns = info["storage"]
         meta = [f"<{ns}> <{RDF_TYPE}> <{PIM_STORAGE}> .\n"]
+        if dataset_links:
+            meta.append(f"<{ns}> <{RDF_TYPE}> <{VOID_DATASET}> .\n")
         if info["service"]:
             meta.append(f"<{ns}> <{VOID_ENDPOINT}> <{info['endpoint']}> .\n")
         Path(web_dir, name).mkdir(exist_ok=True)
@@ -104,4 +117,17 @@ def run(dconf, publishers):
 
     documents = sum(1 for _ in web_dir.rglob("*.nq")) - 1          # not the server root's .acl.nq
     LOGGER.info(f"{documents} documents in {len(publishers)} storages under {web_dir}")
-    return {"documents": documents, "storages": len(publishers)}
+    return {"documents": documents, "storages": len(publishers), "dataset_links": linked}
+
+
+def link_datasets(dconf, publishers, web_dir):
+    """Append `<document> void:inDataset <storage root>` to every document of every publisher (after the
+    placements, so to their final content). Returns how many documents were linked."""
+    linked = 0
+    for name, info in publishers.items():
+        for path in sorted(Path(web_dir, name).rglob("*.nq")):
+            document = dconf.base + path.relative_to(web_dir).as_posix()[:-len(".nq")]
+            with open(path, "a") as fs:
+                fs.write(f"<{document}> <{VOID_IN_DATASET}> <{info['storage']}> .\n")
+            linked += 1
+    return linked

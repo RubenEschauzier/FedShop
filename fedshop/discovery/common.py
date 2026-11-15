@@ -29,7 +29,7 @@ DEFAULTS = {
     "base_url": "http://localhost:3000/",
     "known": {"ratio": 0.5, "seed": 42, "members": None},
     "layout": {"shops": {"product_pages": 0.5}, "review_sites": {"product_pages": 0.5}, "brands": "per-product",
-               "seed": 42},
+               "dataset_links": False, "seed": 42},
     "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000,
                 "reviews_per_reviewer": 20, "seed": 42},
     "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25,

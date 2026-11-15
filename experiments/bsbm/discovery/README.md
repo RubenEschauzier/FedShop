@@ -113,7 +113,7 @@ For each: `cpu_seconds` and `cpu_percent.avg` are exact, from the CPU counters r
 
 An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (known publishers: half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
 - **A publisher's record leads to its storage.** Its `pim:storage` names the storage root, which lists every document (`ldp:contains`) and names the service, if any. The templates reach the record of every entity they use: a product's `bsbm:producer`, an offer's `bsbm:vendor`, a review's `dc:publisher`, a review's `rev:reviewer`.
-- **Any IRI leads to its storage**, also without the record: dereference it at CSS and walk up to the storage root.
+- **Any IRI leads to its storage**, also without the record: dereference it at CSS and walk up to the storage root. With `layout.dataset_links`, without walking up: every document links to its storage root (`<vendor13/Product42> void:inDataset <vendor13/>`). The root's own representation holds what its `.meta` says (`pim:Storage`, `void:Dataset`, `void:sparqlEndpoint`), as CSS includes a container's metadata in it, so a client never needs to fetch the `.meta` itself.
 - **A product leads to other members.** Through the `rdfs:seeAlso` links of reached listings, and of the brand itself, it leads to the other shops' and review sites' listings of that product. With `links.brand_listings`, through the brand's `fs:listingOf` triples instead, for queries that ask for listings.
 - **A listing leads to its offers, a review page to its reviews.** Through the repeated `bsbm:product` and `bsbm:reviewFor` triples, which match the queries' patterns.
 - **A reviewer leads to their reviews.** Their profile's `foaf:made` triples, for queries that ask for a reviewer's reviews.
@@ -250,6 +250,7 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `layout.review_sites.product_pages` | 0.5 | same | publish | share of review sites, known and not, with product pages |
 | `layout.review_sites.by_day` | 0.5 | 0 | publish | share of review sites, known and not, with a document per review date; the rest a document per review |
 | `layout.brands` | `by-month` | `per-product` | publish | a document per publish month, or per product |
+| `layout.dataset_links` | false | same | fragment | every document links to its publisher's storage root with `void:inDataset`, and the root is a `void:Dataset` |
 | `layout.seed` | 42 | same | publish | which shops and review sites have which layout |
 | `links.reviews` | 2 | same | publish | shop listing → review pages |
 | `links.where_to_buy` | 3 | same | publish | review page → shop listings |
