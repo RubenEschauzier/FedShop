@@ -33,7 +33,7 @@ A publisher groups its entities into documents in one of these ways (`layout`); 
 
 - **Generation.** Everything comes from FedShop's own WatDiv templates, run by the benchmark into its own folder; FedShop's datasets are not used or changed.
   - **Product catalog:** FedShop's product template for `brands.products` products (40,000 full, 20,000 small) and `brands.count` producers. Numbers of types and features follow from the catalog size by FedShop's formulas.
-  - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded.
+  - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded. A review site has one reviewer per `members.reviews_per_reviewer` reviews.
 - **Brands.** A brand's product `producer22/products/2005-06#Product77` carries the full BSBM specification: label, comment, types, features, numeric and textual properties, producer. Brand sizes follow rank^-`zipf` (0.8) with at least `min_products`: in the full config 3,295 products for the largest brand and 27 for the smallest, so 20 to 77 documents per brand by month.
 - **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/products/2005-06#Product77>`. Offers and reviews point to the listing, as in FedShop, and state their local name (`dcterms:identifier "Offer7"`), from which the product-page layout makes their IRI.
 - **Layouts.** Which shops and review sites have which layout is drawn per kind and per known or not (`layout.shops`, `layout.review_sites`), so known and discovered publishers are split alike; brands all have one (`layout.brands`). A layout changes IRIs, not triples, so the services, the workload and the reference answers use the IRIs the documents use:
@@ -229,7 +229,8 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `members.review_sites` | 20 | 20 | members, publish | review sites (`ratingsite0`…) |
 | `members.pool` | 20,000 | 200 | members, publish | the catalog's first products, which members deal in |
 | `members.offers` | 2,000 | 20 | members | average offers per shop (`normal_dist(3, 1, avg)`) |
-| `members.reviews` | 10,000 | 100 | members | average reviews per review site; reviewers per site = reviews / 20 |
+| `members.reviews` | 10,000 | 100 | members | average reviews per review site |
+| `members.reviews_per_reviewer` | 20 | same | members | reviewers per site = reviews / this |
 | `members.seed` | 42 | same | members | each member's offer or review count |
 | `known.ratio` | 0.5 | same | publish | share of shops and of review sites known up front |
 | `known.members` | – (drawn) | same | publish | an explicit list of known shops and review sites instead of drawing them |

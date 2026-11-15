@@ -7,6 +7,7 @@
   that catalog. They deal in the catalog's first `members.pool` products, the way FedShop's members
   deal in its product pool, so brands sell far more products than any shop lists. Each member's
   number of offers or reviews is drawn like FedShop draws it (normal_dist(3, 1, avg)), but seeded.
+  A review site has one reviewer per `members.reviews_per_reviewer` reviews.
 
 Products are then given to brands by size: brand k gets a share proportional to (k+1)^-zipf, with
 at least `min_products`, so a few brands are big and the long tail stays moderate.
@@ -25,6 +26,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 - `dconf.members_conf`: `discovery.members`
     offers         number average offers per shop (normal_dist avg)         2000
     reviews        number average reviews per review site                   10000
+    reviews_per_reviewer  int  reviews per reviewer, on average             20
     seed           any    seed of each member's offer or review count       42
 - `dconf.pool`: `discovery.members.pool`, products shops and review sites deal in     20000
 - `dconf.member_names`: vendor0..vendor<shops-1>, ratingsite0..ratingsite<review_sites-1>,
@@ -107,7 +109,7 @@ def generate_members(dconf, force=False):
             schema.params.offer_n = fedshop_count(rng, float(conf["offers"]))
         else:
             schema.params.review_n = fedshop_count(rng, float(conf["reviews"]))
-            schema.params.person_n = max(1, schema.params.review_n // 20)
+            schema.params.person_n = max(1, schema.params.review_n // int(conf.get("reviews_per_reviewer", 20)))
         schema.export_output_dir = str(out)
         schema.export_dep_output_dir = catalog_products
         configfile = str(out / f"{name}.config.yaml")
