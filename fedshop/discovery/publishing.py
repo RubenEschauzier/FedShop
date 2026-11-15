@@ -33,7 +33,12 @@ it says `fs:listingOf <brand product>`. Offers and reviews point to the listing,
 
 Listings of the same product link to each other with rdfs:seeAlso (a shop's listing to a few
 review sites' pages, a page to a few shops' listings), and a brand's product links to a few
-listings ("where to buy", "reviewed at"). Peers are drawn per listing, seeded.
+listings ("where to buy", "reviewed at"). Peers are drawn per listing, seeded. An engine follows
+rdfs:seeAlso whatever the query, so these links make nearly every listing reachable from any
+product. With `links.brand_listings` the brand instead states, for every listing of its product,
+`<listing> fs:listingOf <product>` in the product's document (and in its graph): an engine
+following the query only reaches the listings when the query asks for listings (a pattern
+`?listing fs:listingOf ...`). The experiments set the seeAlso counts to 0 with it.
 
 Documents get triples that let a traversal engine follow the query (cMatch: a triple matching a
 query pattern leads to the IRIs in it). They are copies of triples the publisher already states, placed
@@ -58,7 +63,7 @@ import csv
 import json
 import random
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from . import layout
@@ -363,14 +368,24 @@ class Publishing:
                         continue
                     peers = sorted((m for m in holders if m != member and kind_of(m) == dst), key=number)
                     for peer in sample(key, f"{n}|{member}", peers):
-                        links.append((product, member, holders[member], peer, holders[peer]))
+                        links.append((product, member, holders[member], peer, holders[peer], "seeAlso"))
             brand = self.brand_name(self.catalog.brand_of[n])
             for key, dst in (("brand_where_to_buy", "vendor"), ("brand_reviews", "ratingsite")):
                 peers = sorted((m for m in holders if kind_of(m) == dst), key=number)
                 for peer in sample(key, n, peers):
-                    links.append((product, brand, product, peer, holders[peer]))
-        for product, publisher, source, peer, target in links:
-            self.data[publisher].append(nt(f"<{source}>", f"<{SEEALSO}>", f"<{target}>"))
+                    links.append((product, brand, product, peer, holders[peer], "seeAlso"))
+            if conf.get("brand_listings"):
+                for peer in sorted(holders, key=lambda m: (kind_of(m), number(m))):
+                    links.append((product, brand, product, peer, holders[peer], "listingOf"))
+        for product, publisher, source, peer, target, via in links:
+            if via == "seeAlso":
+                self.data[publisher].append(nt(f"<{source}>", f"<{SEEALSO}>", f"<{target}>"))
+            else:
+                # The brand's own triple about another publisher's listing: in its graph (for its
+                # service) and placed in the product's document (fragment.py leaves it out of the listing's)
+                line = nt(f"<{target}>", f"<{LISTING_OF}>", f"<{source}>")
+                self.data[publisher].append(line)
+                self.placements.append(f"{line[:-3]} <{doc(source)}> .\n")
         self.links = links
 
     def build_placements(self):
@@ -445,13 +460,16 @@ def write(dconf, pub, publishers):
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(pub.categories.items())}, indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
         writer = csv.writer(fs, delimiter="\t")
-        writer.writerow(["product", "publisher", "from", "peer", "to"])
+        writer.writerow(["product", "publisher", "from", "peer", "to", "via"])
         writer.writerows(pub.links)
 
 
 def read_links(dconf):
+    """links.tsv's rows: (product, publisher, from, peer, to, via), via rdfs:seeAlso ("seeAlso", followed
+    for every query) or the brand's fs:listingOf ("listingOf", followed when the query asks for listings)."""
     with open(dconf.path("links.tsv"), newline="") as fs:
-        return [tuple(r) for r in list(csv.reader(fs, delimiter="\t"))[1:]]
+        rows = [tuple(r) for r in list(csv.reader(fs, delimiter="\t"))[1:]]
+    return [r if len(r) == 6 else (*r, "seeAlso") for r in rows]
 
 
 def run(dconf):
@@ -470,6 +488,7 @@ def run(dconf):
         k["triples"] += info["triples"]
     summary = {"publishers": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in pub.listings.values()), "listed_products": len(pub.listings),
-               "links": len(pub.links), "placed_triples": len(pub.placements), "type_brand_links": sum(len(b) for b in pub.categories.values())}
+               "links": Counter(l[5] for l in pub.links), "placed_triples": len(pub.placements),
+               "type_brand_links": sum(len(b) for b in pub.categories.values())}
     LOGGER.info(json.dumps(summary))
     return summary

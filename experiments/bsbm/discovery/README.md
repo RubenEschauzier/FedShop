@@ -42,6 +42,7 @@ A publisher groups its entities into documents in one of these ways (`layout`); 
 - **Reviewers.** Reviewer profiles move out of the review sites into `reviewer<k>/profile`. Reviews point to them with `rev:reviewer`, and a profile lists the reviews its reviewer wrote, at any review site, with `foaf:made`.
 - **Taxonomy.** FedShop's types and features, without copies, plus every country as `taxonomy/countries#US`. Each type links with `rdfs:seeAlso` to the records of the brands that make it.
 - **Links.** `rdfs:seeAlso` between listings of the same product: a shop's listing to `reviews` (2) review pages, a review page to `where_to_buy` (3) listings, a review page to `also_reviewed` (0) other pages. A brand's product links to `brand_where_to_buy` (2) listings and to every review page of the product (`brand_reviews: all`, "reviewed at"). Peers are drawn per listing, seeded. Shops never link to shops, and review sites don't link to each other.
+  - **Listings at the brand** (`links.brand_listings`). A traversal engine follows `rdfs:seeAlso` whatever the query, so these links make almost every listing reachable from any product. With `brand_listings`, the brand instead states `<vendor13/Product77#it> fs:listingOf <producer22/products/2005-06#Product77>` for every listing of its product: in its graph (so its service has it) and in the product's document, not in the listing's (which states the same triple itself). An engine following the query's patterns only uses these triples when the query asks for listings (`?listing fs:listingOf …`, with a variable as subject, so the engine follows the listing). The traversal-feasible configuration sets every seeAlso count to 0 with it.
 - **Documents for traversal.** Some documents repeat triples their publisher already states in another document, so that a traversal engine following the query's patterns (cMatch: a triple matching a pattern leads to the IRIs in it) gets from one document to the next. The data behind the services doesn't change.
   - **Listings and review pages** repeat `<offer> bsbm:product <listing>` of each of their offers and `<review> bsbm:reviewFor <page>` of each of their reviews, so a reached listing leads to its offers and a review page to its reviews. Product pages hold their offers and reviews already.
   - **Brand records.** A brand's own record (`producer22/Producer22`) repeats `<product> bsbm:producer <record>` of each of its products, as a brand's catalog page lists its range.
@@ -106,7 +107,7 @@ For each: `cpu_seconds` and `cpu_percent.avg` are exact, from the CPU counters r
 An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (known publishers: half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
 - **A publisher's record leads to its storage.** Its `pim:storage` names the storage root, which lists every document (`ldp:contains`) and names the service, if any. The templates reach the record of every entity they use: a product's `bsbm:producer`, an offer's `bsbm:vendor`, a review's `dc:publisher`, a review's `rev:reviewer`.
 - **Any IRI leads to its storage**, also without the record: dereference it at CSS and walk up to the storage root.
-- **A product leads to other members.** Through the `rdfs:seeAlso` links of reached listings, and of the brand itself, it leads to the other shops' and review sites' listings of that product.
+- **A product leads to other members.** Through the `rdfs:seeAlso` links of reached listings, and of the brand itself, it leads to the other shops' and review sites' listings of that product. With `links.brand_listings`, through the brand's `fs:listingOf` triples instead, for queries that ask for listings.
 - **A listing leads to its offers, a review page to its reviews.** Through the repeated `bsbm:product` and `bsbm:reviewFor` triples, which match the queries' patterns.
 - **A reviewer leads to their reviews.** Their profile's `foaf:made` triples, for queries that ask for a reviewer's reviews.
 - **A brand leads to its products.** Its record's `bsbm:producer` triples match patterns like `?product bsbm:producer ?producer`.
@@ -245,6 +246,7 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `links.also_reviewed` | 0 | same | publish | review page → other review pages |
 | `links.brand_where_to_buy` | 2 | same | publish | brand product → shop listings |
 | `links.brand_reviews` | `all` | same | publish | brand product → review pages |
+| `links.brand_listings` | false | same | publish | the brand states `<listing> fs:listingOf <product>` for every listing of its products |
 | `links.seed` | 42 | same | publish | peers per listing |
 | `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
 | `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load, serve | every graph (analysis) and the discovered services |
@@ -310,7 +312,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 | `data/discoverable/` | the other publishers' triples: `taxonomy.nt`, `shops/`, `review-sites/`, `producers/`, `reviewers/` |
 | `publishers.json` | every publisher: kind, known or not, layout (shops, review sites and brands), storage, graph file, service and endpoint, triples |
 | `layout/` | the fragmenter run that rewrote the product pages' IRIs: its config, input and output; generation only |
-| `links.tsv` | every link: product, publisher, from, peer, to |
+| `links.tsv` | every link: product, publisher, from, peer, to, via (`seeAlso`, or the brand's `listingOf`) |
 | `placements.nq` | triples placed in another document than their subject's, with that document as graph |
 | `categories.json` | every product type and the brands with a category page for it |
 | `web/` | the documents CSS serves, by URL path (not split: IRIs don't tell known from discoverable) |

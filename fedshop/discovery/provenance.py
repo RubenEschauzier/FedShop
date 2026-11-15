@@ -11,8 +11,10 @@ without SERVICE clauses). In each round the values the query binds lead further:
 its constants, and the terms of patterns supplied by reached publishers. An IRI leads to the
 storage that serves its document (dereference it; the storage root names the service, if any). A
 brand product leads, through the rdfs:seeAlso links of reached listings and of the brand itself, to
-the other publishers' listings of that product. A solution is reachable if some derivation only
-uses reached publishers.
+the other publishers' listings of that product; through the brand's `<listing> fs:listingOf <product>`
+triples (links.tsv's "listingOf" rows) only if the query has an fs:listingOf pattern, since an
+engine follows those triples only when a pattern matches them. A solution is reachable if some
+derivation only uses reached publishers.
 """
 import json
 import re
@@ -22,7 +24,7 @@ from pathlib import Path
 from rdflib.plugins.sparql.algebra import translateQuery, traverse
 from rdflib.plugins.sparql.parser import parseQuery
 
-from .common import sparql_csv
+from .common import FS, sparql_csv
 
 TERM = re.compile(r'<[^>]*>|"(?:[^"\\]|\\.)*"(?:\^\^<[^>]*>|\^\^\S+|@[\w-]+)?|\S+')
 SERVICE_OPEN = re.compile(r"^SERVICE\s*<([^>]+)>\s*\{$", re.I)
@@ -136,10 +138,11 @@ class Analyzer:
         self.reviewers = {i["storage"] for i in publishers.values() if i["kind"] == "reviewer"}
         self.brands = {i["storage"] for i in publishers.values() if i["kind"] == "producer"}
         self.lookup_only = {i["storage"] for i in publishers.values() if not i["service"]}
-        self.adj = defaultdict(lambda: defaultdict(set))   # product -> publisher storage -> peer storages
+        # via ("seeAlso" or "listingOf") -> product -> publisher storage -> peer storages
+        self.adj = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
         self.holders = defaultdict(set)                     # product -> publishers with a listing, and its brand
-        for product, publisher, _, peer, _ in links:
-            self.adj[product][self.ns[publisher]].add(self.ns[peer])
+        for product, publisher, _, peer, _, via in links:
+            self.adj[via][product][self.ns[publisher]].add(self.ns[peer])
             self.holders[product] |= {self.ns[publisher], self.ns[peer]}
         # A type leads to the brands that make it (the taxonomy's seeAlso links to their records).
         categories = Path(dconf.path("categories.json"))
@@ -152,20 +155,21 @@ class Analyzer:
         rest = iri[len(self.base):]
         return f"{self.base}{rest.split('/', 1)[0]}/" if "/" in rest else None
 
-    def follow(self, product, reached):
-        """Publishers whose listings of product are reached through seeAlso links from reached ones."""
-        adj = self.adj.get(product)
-        if not adj:
+    def follow(self, product, reached, vias):
+        """Publishers whose listings of product are reached through the links (of kinds vias) from reached ones."""
+        adjs = [self.adj[v][product] for v in vias if product in self.adj[v]]
+        if not adjs:
             return set()
         seen = {o for o in self.holders[product] if o in reached}
         frontier = set(seen)
         while frontier:
-            frontier = set().union(*(adj.get(o, set()) for o in frontier)) - seen
+            frontier = set().union(*(adj.get(o, set()) for adj in adjs for o in frontier)) - seen
             seen |= frontier
         return seen - reached
 
     def reach(self, patterns, row):
         constants = {t[1:-1] for tp in patterns for t in tp if t.startswith("<")}
+        vias = ["seeAlso"] + (["listingOf"] if any(tp[1] == f"<{FS}listingOf>" for tp in patterns) else [])
         reached = set(self.known) | {o for o in map(self.storage, constants) if o}
         reached |= set().union(*(self.categories.get(c, set()) for c in constants))
         rounds = 1
@@ -179,8 +183,8 @@ class Analyzer:
                 o = self.storage(value)
                 if o and o not in reached:
                     new.add(o)
-                if value in self.adj:
-                    new |= self.follow(value, reached | new)
+                if any(value in self.adj[v] for v in vias):
+                    new |= self.follow(value, reached | new, vias)
             new -= reached
             if not new:
                 return reached, rounds

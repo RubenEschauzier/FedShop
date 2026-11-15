@@ -9,6 +9,9 @@
 - Triples that belong in another document than their subject's (placements.nq: offers in their
   listing, reviews in their page and products in their brand's record, for traversal) are
   placed in one more fragmenter run (tools/fragmenter/place.js).
+- A publisher's graph can state triples about another publisher's resources (a brand's
+  `<listing> fs:listingOf <product>`, publishing.py). They are in its service, and placed in its own
+  documents only, not in the document of their subject: the main pass reads the graph without them.
 - Every publisher's directory is a storage root. Its metadata (.meta, read by CSS) types it as a
   pim:Storage, which CSS advertises with a `Link: <pim:Storage>; rel="type"` header, and, for
   publishers with a query service, names that service with void:sparqlEndpoint. CSS lists the root's
@@ -33,15 +36,14 @@ def escape_regex(text):
 
 
 def config(dconf, files, web_dir):
-    """files: graph files, relative to data/ (publishers.json's `file`)."""
-    data_dir = dconf.dir("data")
+    """files: graph files to fragment (absolute paths)."""
     return {
         "@context": "https://linkedsoftwaredependencies.org/bundles/npm/rdf-dataset-fragmenter/^2.0.0/components/context.jsonld",
         "@id": "urn:rdf-dataset-fragmenter:default",
         "@type": "Fragmenter",
         "quadSource": {
             "@type": "QuadSourceComposite",
-            "sources": [{"@type": "QuadSourceFile", "filePath": str(data_dir / f)} for f in files],
+            "sources": [{"@type": "QuadSourceFile", "filePath": str(f)} for f in files],
         },
         "transformers": [],
         "fragmentationStrategy": {"@type": "FragmentationStrategySubject"},
@@ -55,12 +57,27 @@ def config(dconf, files, web_dir):
     }
 
 
+def own_subjects(dconf, info):
+    """A publisher's graph file, or, if it states triples about other publishers' resources, a copy
+    without them (fragmenter/own/<file>)."""
+    path = Path(dconf.dir("data"), info["file"])
+    prefix = f"<{info['storage']}"
+    with open(path) as fs:
+        lines = fs.readlines()
+    own = [l for l in lines if l.startswith(prefix)]
+    if len(own) == len(lines):
+        return path
+    copy = Path(dconf.path("fragmenter", "own", info["file"]))
+    copy.write_text("".join(own))
+    return copy.resolve()
+
+
 def run(dconf, publishers):
     shutil.rmtree(dconf.dir("web"))
     web_dir = dconf.dir("web")
     # Each publisher's file holds only its own subjects and the file sink appends, so batches of publishers
     # can be fragmented one after the other into the same documents.
-    files = [info["file"] for info in publishers.values()]
+    files = [own_subjects(dconf, info) for info in publishers.values()]
     batches = [files[i:i + BATCH] for i in range(0, len(files), BATCH)]
     LOGGER.info(f"Fragmenting every publisher's data with rdf-dataset-fragmenter ({len(batches)} runs)...")
     for i, batch in enumerate(batches):

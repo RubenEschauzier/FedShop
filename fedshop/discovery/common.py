@@ -34,7 +34,7 @@ DEFAULTS = {
                 "reviews_per_reviewer": 20, "seed": 42},
     "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25, "seed": 42},
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
-              "seed": 42},
+              "brand_listings": False, "seed": 42},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
                  "http_port": 8891, "known_container": "fedshop-discovery-virtuoso-known",
                  "known_isql_port": 1113, "known_http_port": 8892, "first_service_port": 34300,
