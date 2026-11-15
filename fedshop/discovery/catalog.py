@@ -8,6 +8,8 @@
   deal in its product pool, so brands sell far more products than any shop lists. Each member's
   number of offers or reviews is drawn like FedShop draws it (normal_dist(3, 1, avg)), but seeded.
   A review site has one reviewer per `members.reviews_per_reviewer` reviews.
+  With markets (markets.py), a member deals in its market's pool of `members.pool / markets.count`
+  products: WatDiv draws from the first that many, and publishing.py maps them 1:1 to the market's.
 
 Products are then given to brands by size: brand k gets a share proportional to (k+1)^-zipf, with
 at least `min_products`, so a few brands are big and the long tail stays moderate.
@@ -28,6 +30,7 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
     reviews        number average reviews per review site                   10000
     reviews_per_reviewer  int  reviews per reviewer, on average             20
     seed           any    seed of each member's offer or review count       42
+- `dconf.markets_conf`: `discovery.markets` (only `count`, for the pool size; see markets.py)
 - `dconf.pool`: `discovery.members.pool`, products shops and review sites deal in     20000
 - `dconf.member_names`: vendor0..vendor<shops-1>, ratingsite0..ratingsite<review_sites-1>,
   from `discovery.members.shops` and `.review_sites`                                   20, 20
@@ -46,6 +49,7 @@ from omegaconf import OmegaConf
 
 from ..utils import load_config
 from .common import LOGGER, read_nquads
+from .markets import pool_size
 
 
 def watdiv_dir(dconf):
@@ -104,7 +108,7 @@ def generate_members(dconf, force=False):
         rng = random.Random(f"{conf['seed']}|{name}")
         cfg = load_config(dconf.configfile)
         schema = cfg.generation.schema[section]
-        schema.params.product_n = dconf.pool
+        schema.params.product_n = pool_size(dconf)        # its market's pool (all of it without markets)
         if section == "vendor":
             schema.params.offer_n = fedshop_count(rng, float(conf["offers"]))
         else:
@@ -171,6 +175,9 @@ class Catalog:
                     LOGGER.warning(f"WatDiv wrote no Producer{brand}: it borrows Producer{(brand + k) % self.count}'s record")
                 return list(read_nquads(path))
         raise FileNotFoundError(f"No producer records in {self.dir / 'Producer'}")
+
+    def type_numbers(self):
+        return sorted(int(p.stem[len("ProductType"):]) for p in (self.dir / "ProductType").glob("*.nq"))
 
     def taxonomy_files(self):
         for kind in ("ProductType", "ProductFeature"):

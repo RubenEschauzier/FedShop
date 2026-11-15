@@ -40,6 +40,12 @@ product. With `links.brand_listings` the brand instead states, for every listing
 following the query only reaches the listings when the query asks for listings (a pattern
 `?listing fs:listingOf ...`). The experiments set the seeAlso counts to 0 with it.
 
+With markets (markets.py), shops, review sites, reviewers and brands belong to a market, and a
+member's listings are of its market's products: WatDiv's local product k becomes product
+pool[market][k] (the listing is named after it: <base>vendor13/Product<n>#it). The records'
+countries are of their market, and with `brands.type_spread` a product's types are redrawn from
+those available in its brand's market. markets.json says which publisher and type is in which market.
+
 Documents get triples that let a traversal engine follow the query (cMatch: a triple matching a
 query pattern leads to the IRIs in it). They are copies of triples the publisher already states, placed
 in a second document of the same publisher, so the data behind the services doesn't change:
@@ -70,6 +76,7 @@ from . import layout
 from .catalog import Catalog
 from .common import (BSBM, COUNTRIES, DCTERMS_IDENTIFIER, FS, LOGGER, OWL_SAMEAS, PIM_STORAGE_OF, RDF_TYPE,
                      RDFS_LABEL, SEEALSO, graph_file, graph_order, read_nquads)
+from .markets import Markets
 
 FEDSHOP_MEMBER = re.compile(r"^http://www\.((?:vendor|ratingsite)\d+)\.fr/(.*)$")
 GLOBAL = re.compile(r"^(ProductType|ProductFeature|Product|Producer)(\d+)$")
@@ -87,6 +94,8 @@ DIRECTIONS = {  # (from kind, to kind) -> links setting
 XSD = "http://www.w3.org/2001/XMLSchema#"
 DATE_ONLY = re.compile(r'^"(\d{4}-\d{2}-\d{2})"\^\^<' + re.escape(XSD) + r'dateTime>$')
 DATE = re.compile(r'^"(\d{4}-\d{2}-\d{2})')
+BSBM_COUNTRY = f"<{BSBM}country>"
+PRODUCT_TYPE = re.compile(r"^<" + re.escape(BSBM) + r"ProductType(\d+)>$")
 RECORD_TYPES = {f"<{BSBM}{kind}>" for kind in ("Producer", "Vendor", "RatingSite", "Person")}   # a publisher's own record
 DOUBLE = re.compile(r'^"([^"]*)"\^\^<' + re.escape(XSD) + r'double>$')
 
@@ -129,17 +138,23 @@ def doc(iri):
     return iri.split("#", 1)[0]
 
 
-def choose_known(dconf, names):
-    """Shops and review sites known up front, stratified over both kinds."""
+def choose_known(dconf, names, member_market=None):
+    """Shops and review sites known up front, stratified over both kinds, and over the markets
+    (member_market: name -> market), so that every market has known shops and review sites."""
     explicit = dconf.known_conf.get("members")
     if explicit:
         return sorted(set(explicit) & set(names), key=lambda n: (kind_of(n), number(n)))
     rng = random.Random(dconf.known_conf.get("seed", 42))
     ratio = float(dconf.known_conf.get("ratio", 0.5))
+    market = member_market or {}
     chosen = []
     for kind in ("vendor", "ratingsite"):
-        group = sorted((n for n in names if kind_of(n) == kind), key=number)
-        chosen += rng.sample(group, round(ratio * len(group)))
+        for m in sorted({market.get(n, 0) for n in names}):
+            group = sorted((n for n in names if kind_of(n) == kind and market.get(n, 0) == m), key=number)
+            count = round(ratio * len(group))
+            if member_market and group:
+                count = max(1, count)                  # every market has one known shop and review site
+            chosen += rng.sample(group, count)
     return sorted(chosen, key=lambda n: (kind_of(n), number(n)))
 
 
@@ -186,7 +201,9 @@ class Publishing:
         self.countries = set()
         self.reviewer_iri = {}                 # (site, local Person name) -> reviewer IRI
         self.reviewers = []
-        self.known = set(choose_known(dconf, self.members))
+        self.reviewer_site = {}                # reviewer -> review site
+        self.markets = Markets(dconf, self.catalog, self.members, self.catalog.type_numbers())
+        self.known = set(choose_known(dconf, self.members, self.markets.member_market if self.markets.enabled else None))
         self.layouts = choose_layouts(dconf, self.members, self.known)
         self.product_pages = {m for m, name in self.layouts.items() if name == layout.PRODUCT_PAGES}
         self.brands_layout = dconf.layout_conf.get("brands", layout.PER_PRODUCT)
@@ -226,6 +243,8 @@ class Publishing:
                 if (member, local) not in self.review_day:
                     raise ValueError(f"{member}'s {local} has no review date to group it by")
                 return f"{self.dconf.ns(member)}reviews/{self.review_day[(member, local)]}#{local}"
+            if self.markets.enabled and LOCAL.match(local).group(1) == "Product":
+                local = f"Product{self.market_product(member, int(local[len('Product'):]))}"
             return f"{self.dconf.ns(member)}{local}#it"
         if iri.startswith(BSBM):
             g = GLOBAL.match(iri[len(BSBM):])
@@ -243,6 +262,21 @@ class Publishing:
             return f"{self.dconf.ns('taxonomy')}countries#{code}"
         return iri
 
+    def market_product(self, member, k):
+        """The product a member's WatDiv product k is: k itself, or with markets pool[market][k]."""
+        if not self.markets.enabled:
+            return k
+        pool = self.markets.pool[self.markets.member_market[member]]
+        if k >= len(pool):
+            raise ValueError(f"{member} deals in Product{k}, beyond its market's pool of {len(pool)}: "
+                             "regenerate the members (members --force) after changing markets")
+        return pool[k]
+
+    def country_iri(self, market, name, original):
+        """A record's country: one of its market's (markets.py), or WatDiv's for a global brand."""
+        code = self.markets.country(market, name, original[1:-1][len(COUNTRIES):])
+        return self.map_term(f"<{COUNTRIES}{code}>")
+
     def map_term(self, term):
         if term.startswith("<"):
             return f"<{self.map_iri(term[1:-1])}>"
@@ -258,6 +292,7 @@ class Publishing:
                 name = f"reviewer{len(self.reviewers)}"
                 self.reviewer_iri[(site, local)] = f"{self.dconf.ns(name)}profile#it"
                 self.reviewers.append(name)
+                self.reviewer_site[name] = site
 
     def read(self, member):
         return read_nquads(Path(self.dconf.members_dir, f"{member}.nq"))
@@ -278,17 +313,21 @@ class Publishing:
                     self.data[member].append(nt(self.map_term(s), f"<{DCTERMS_IDENTIFIER}>", f'"{local}"'))
                 if kind == "Product":
                     if p == f"<{OWL_SAMEAS}>":
-                        copies[s] = int(GLOBAL.match(o[1:-1][len(BSBM):]).group(2))
+                        copies[s] = self.market_product(member, int(GLOBAL.match(o[1:-1][len(BSBM):]).group(2)))
                     continue                                   # the brand publishes the specification
                 if kind in ("ProductType", "ProductFeature", "Producer"):
                     continue                                   # the taxonomy and the brands publish these
+                market = self.markets.member_market[member]
                 if kind == "Person":
                     if p == f"<{DC_PUBLISHER}>":
                         continue
                     subject = self.map_term(s)
-                    self.data[subject[1:-1].split("/")[-2]].append(nt(subject, p, self.map_term(o)))
+                    reviewer = subject[1:-1].split("/")[-2]
+                    obj = self.country_iri(market, reviewer, o) if p == BSBM_COUNTRY else self.map_term(o)
+                    self.data[reviewer].append(nt(subject, p, obj))
                     continue
-                self.data[member].append(nt(self.map_term(s), p, self.map_term(o)))
+                obj = self.country_iri(market, member, o) if p == BSBM_COUNTRY else self.map_term(o)
+                self.data[member].append(nt(self.map_term(s), p, obj))
             for copy, n in sorted(copies.items(), key=lambda kv: kv[1]):
                 listing = self.map_term(copy)
                 self.listings[n][member] = listing[1:-1]
@@ -304,21 +343,32 @@ class Publishing:
                     self.data[reviewer[1:-1].split("/")[-2]].append(nt(reviewer, f"<{FOAF_MADE}>", review))
 
     def spec(self, n):
-        """The brand's triples for product n."""
-        out = []
+        """The brand's triples for product n. With brands.type_spread, each of WatDiv's product types is
+        replaced by one available in the brand's market (markets.py), without duplicates."""
+        out, seen = [], set()
         for s, p, o in self.catalog.product(n):
             if p == f"<{OWL_SAMEAS}>":
                 continue
             if p == f"<{BSBM}producer>":
                 o = f"<{self.producer_iri(self.catalog.brand_of[n])}>"
-            out.append((f"<{self.product_iri(n)}>", p, self.map_term(o)))
+            if p == f"<{RDF_TYPE}>":
+                t = PRODUCT_TYPE.match(o)
+                if t:
+                    o = f"<{BSBM}ProductType{self.markets.remap_type(self.catalog, n, int(t.group(1)))}>"
+            triple = (f"<{self.product_iri(n)}>", p, self.map_term(o))
+            if triple not in seen:
+                seen.add(triple)
+                out.append(triple)
         return out
 
     def build_brands(self):
         for brand in range(self.catalog.count):
             name = self.brand_name(brand)
+            market = self.markets.brand_market[brand]
             for s, p, o in self.catalog.producer(brand):
-                if p != f"<{OWL_SAMEAS}>":
+                if p == f"<{BSBM}country>":
+                    self.data[name].append(nt(f"<{self.producer_iri(brand)}>", p, self.country_iri(market, name, o)))
+                elif p != f"<{OWL_SAMEAS}>":
                     self.data[name].append(nt(f"<{self.producer_iri(brand)}>", p, self.map_term(o)))
         for n in range(self.catalog.n):
             name = self.brand_name(self.catalog.brand_of[n])
@@ -458,6 +508,8 @@ def write(dconf, pub, publishers):
     Path(dconf.path("publishers.json")).write_text(json.dumps(publishers, indent=2))
     Path(dconf.path("placements.nq")).write_text("".join(sorted(set(pub.placements))))
     Path(dconf.path("categories.json")).write_text(json.dumps({t: sorted(b, key=number) for t, b in sorted(pub.categories.items())}, indent=1))
+    Path(dconf.path("markets.json")).write_text(json.dumps(
+        pub.markets.describe(publishers, pub.reviewer_site, lambda t: f"{dconf.ns('taxonomy')}ProductType{t}#it"), indent=1))
     with open(dconf.path("links.tsv"), "w", newline="") as fs:
         writer = csv.writer(fs, delimiter="\t")
         writer.writerow(["product", "publisher", "from", "peer", "to", "via"])
@@ -489,6 +541,7 @@ def run(dconf):
     summary = {"publishers": {k: dict(v) for k, v in kinds.items()},
                "listings": sum(len(h) for h in pub.listings.values()), "listed_products": len(pub.listings),
                "links": Counter(l[5] for l in pub.links), "placed_triples": len(pub.placements),
-               "type_brand_links": sum(len(b) for b in pub.categories.values())}
+               "type_brand_links": sum(len(b) for b in pub.categories.values()),
+               "markets": pub.markets.names}
     LOGGER.info(json.dumps(summary))
     return summary

@@ -12,7 +12,9 @@ has to be discovered. Each template states in its header:
 
 Values are chosen per template from the data, seeded, aiming at the size range: thresholds are set
 from the values of the products they filter, products are drawn from those with enough reviews or
-offers. A candidate is kept when its reference answer has a size within range, and, unless it is a
+offers. With markets (markets.py, markets.json), the templates over a product type (q01, q03, q04,
+q14, q16) take their types in turns by spread (types of one market, of two, of all), so their
+instances touch one market, two or all; analysis.json reports `markets_touched`. A candidate is kept when its reference answer has a size within range, and, unless it is a
 control, part of it needs a discovered publisher, can be reached, and involves at least
 `discovered` publishers beyond the named ones. Delegation gains are reported, not selected on.
 
@@ -39,7 +41,8 @@ from .publishing import number, read_links
 FIELDS = ["query", "instance", "kind", "selected", "reason", "category", "solutions", "reachable_share",
           "reachable_needing_discovery", "reachable_mixed", "discovered_in_answer", "solutions_needing_reviewers",
           "solutions_needing_lookup_only", "brands_needed", "lookup_only_needed", "storages_needed",
-          "storages_reached_best_case", "link_rounds", "max_gain", "gain_at", "reference_rows", "values", "error"]
+          "storages_reached_best_case", "link_rounds", "markets_touched", "max_gain", "gain_at", "reference_rows",
+          "values", "error"]
 PREFIXES = """PREFIX bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 PREFIX rev: <http://purl.org/stuff/rev#>
@@ -113,6 +116,32 @@ class Values:
         self.rating_share = {r: sum(n for k, n in ratings.items() if k >= r) / reviews for r in range(1, 11)}
         self.vendor_record = {publisher_of(dconf, r["g"]): r["v"]   # shop -> its vendor record
                               for r in self.rows("SELECT ?g ?v WHERE { GRAPH ?g { ?v rdf:type bsbm:Vendor } }")}
+        markets = Path(dconf.path("markets.json"))
+        self.type_markets = ({t: frozenset(ms) for t, ms in json.loads(markets.read_text())["types"].items()}
+                             if markets.exists() else {})
+
+    def spread(self, t):
+        """In how many markets a product type is available (1 without markets)."""
+        return len(self.type_markets.get(t, ())) or 1
+
+    def by_spread(self, items, type_of=lambda item: item):
+        """items in turns by their type's spread, narrowest first, each spread in its own order."""
+        buckets = defaultdict(list)
+        for item in items:
+            buckets[self.spread(type_of(item))].append(item)
+        out, turns = [], [list(reversed(buckets[k])) for k in sorted(buckets)]
+        while any(turns):
+            out += [turn.pop() for turn in turns if turn]
+        return out
+
+    def near(self, t, others):
+        """others, the types available only where t is first, then those sharing a market with it."""
+        mt = self.type_markets.get(t)
+        if not mt:
+            return others
+        within = [u for u in others if self.type_markets.get(u, mt) <= mt]
+        sharing = [u for u in others if self.type_markets.get(u, mt) & mt]
+        return within or sharing or others
 
     def rows(self, query):
         return sparql_csv(self.endpoint, PREFIXES + "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n"
@@ -159,7 +188,7 @@ def candidates(values, query, rng, limit, meta):
 
     sold = set(values.sold)
     if query in ("q01", "q03", "q04"):
-        types = [t for t in shuffled(values.of_type) if len(values.of_type[t] & sold) >= lo]
+        types = values.by_spread([t for t in shuffled(values.of_type) if len(values.of_type[t] & sold) >= lo])
         for t in types[:limit]:
             pool = sorted(values.of_type[t] & sold)
             if query == "q01":
@@ -171,7 +200,7 @@ def candidates(values, query, rng, limit, meta):
                 feature = rng.choice(sorted(values.features[rng.choice(pool)]) or ["none"])
                 yield {"ProductType": t, "x": x, "y": y, "ProductFeature": feature}
             else:
-                others = [u for u in types if u != t]
+                others = values.near(t, [u for u in types if u != t])
                 if not others:                                            # one type with enough products
                     continue
                 other = rng.choice(others)
@@ -231,11 +260,11 @@ def candidates(values, query, rng, limit, meta):
         for product in shuffled(pool)[:limit]:
             yield {"Product": product}
     elif query == "q14":
-        for product in shuffled(values.reviewed)[:limit]:
-            if values.types[product]:
-                t = rng.choice(sorted(values.types[product]))
-                reviews = sum(values.review_count[x] for x in values.of_type[t])
-                yield {"Product": product, "ProductType": t, "r": rating_threshold(values, reviews, target())}
+        pairs = [(product, rng.choice(sorted(values.types[product])))
+                 for product in shuffled(values.reviewed)[:limit * 10] if values.types[product]]
+        for product, t in values.by_spread(pairs, lambda pair: pair[1])[:limit]:
+            reviews = sum(values.review_count[x] for x in values.of_type[t])
+            yield {"Product": product, "ProductType": t, "r": rating_threshold(values, reviews, target())}
     elif query == "q16":
         pairs = []
         for shop in values.shops:
@@ -244,7 +273,7 @@ def candidates(values, query, rng, limit, meta):
                 for t in values.types.get(x, []):
                     by_type[t] += values.review_count[x]
             pairs += [(shop, t, n) for t, n in by_type.items() if n >= lo]
-        for shop, t, reviews in shuffled(pairs)[:limit]:
+        for shop, t, reviews in values.by_spread(shuffled(pairs), lambda pair: pair[1])[:limit]:
             yield {"Shop": values.endpoint_of(shop), "ProductType": t, "r": rating_threshold(values, reviews, target())}
 
 

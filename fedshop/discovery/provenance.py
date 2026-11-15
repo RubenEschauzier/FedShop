@@ -148,6 +148,9 @@ class Analyzer:
         categories = Path(dconf.path("categories.json"))
         self.categories = ({t: {self.ns[b] for b in brands} for t, brands in json.loads(categories.read_text()).items()}
                            if categories.exists() else {})
+        markets = Path(dconf.path("markets.json"))
+        self.market = ({self.ns[n]: m for n, m in json.loads(markets.read_text())["publishers"].items()}
+                       if markets.exists() else {})
 
     def storage(self, iri):
         if not iri or not iri.startswith(self.base):
@@ -266,5 +269,8 @@ class Analyzer:
             "lookup_only_needed": len(needed & self.lookup_only),
             "storages_reached_best_case": len(reached_any),
             "link_rounds": max_rounds,
+            "markets_in_answer": sorted({self.market[o] for o in storages if o in self.market}),
+            # markets of the answer's publishers, the global brands' not counted
+            "markets_touched": len({self.market[o] for o in storages if o in self.market} - {"global"}),
         }
         return record

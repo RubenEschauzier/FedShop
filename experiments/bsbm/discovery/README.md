@@ -34,6 +34,13 @@ A publisher groups its entities into documents in one of these ways (`layout`); 
 - **Generation.** Everything comes from FedShop's own WatDiv templates, run by the benchmark into its own folder; FedShop's datasets are not used or changed.
   - **Product catalog:** FedShop's product template for `brands.products` products (40,000 full, 20,000 small) and `brands.count` producers. Numbers of types and features follow from the catalog size by FedShop's formulas.
   - **Shops and review sites:** FedShop's vendor and rating-site templates, one run per member, against that catalog. Each member deals in the catalog's first `members.pool` products (20,000 full, 200 small): about 1 offer and 5 reviews per product, so not every member sells everything. Offers and reviews per member are drawn like FedShop's `normal_dist` (average 2,000 and 10,000 in the full config, as FedShop's full config), but seeded. A review site has one reviewer per `members.reviews_per_reviewer` reviews.
+- **Markets** (`markets`, off by default). Shops, review sites, their reviewers and brands get a home market, a group of countries (`markets.countries`, e.g. US · UK/FR/ES · DE/AT/RU · JP/KR · CN). Members deal only in their market's products, so crawling a whole shop no longer reaches products of nearly every brand.
+  - **Brands:** the `markets.global_brands` largest brands are global; the others are dealt out over the markets by size rank, so every market gets a similar mix of big and small brands.
+  - **Pools:** each market has a pool of `members.pool / markets.count` products: its own brands' products, plus a share (`markets.global_share`) of the global brands' products, the same ones in every market. A member's WatDiv run deals in the first that many catalog products, and its local product k becomes product k of its market's pool (1:1, so no shop lists a product twice). The listing is named after the product it lists (`vendor13/Product4711`). Per product there are as many offers and reviews as without markets.
+  - **Known members** are drawn per market, so every market has known shops and review sites.
+  - **Countries:** the records of shops, review sites, reviewers and local brands get a country of their market; global brands keep WatDiv's.
+  - **Types** (`brands.type_spread`): every product type is available in one market, two, or all of them, and a product's types (WatDiv's 9) are redrawn from those available in its brand's market; products of global brands get types available everywhere. A query over a type then touches as many markets as the type is available in.
+  - `markets.json` lists every publisher's market and every type's markets.
 - **Brands.** A brand's product `producer22/products/2005-06#Product77` carries the full BSBM specification: label, comment, types, features, numeric and textual properties, producer. Brand sizes follow rank^-`zipf` (0.8) with at least `min_products`: in the full config 3,295 products for the largest brand and 27 for the smallest, so 20 to 77 documents per brand by month.
 - **Listings.** A shop or review site keeps FedShop's local product IRI (`vendor13/Product77`) as its listing (or review page). The listing no longer repeats the product; it says `fs:listingOf <producer22/products/2005-06#Product77>`. Offers and reviews point to the listing, as in FedShop, and state their local name (`dcterms:identifier "Offer7"`), from which the product-page layout makes their IRI.
 - **Layouts.** Which shops and review sites have which layout is drawn per kind and per known or not (`layout.shops`, `layout.review_sites`), so known and discovered publishers are split alike; brands all have one (`layout.brands`). A layout changes IRIs, not triples, so the services, the workload and the reference answers use the IRIs the documents use:
@@ -146,6 +153,8 @@ Each template's header gives its kind, the range of answer sizes (`# rows:`) and
 - **Its answer size is within range.**
 - **It needs discovery** (except q11, the control): part of the answer needs a publisher the query doesn't name, is reachable, and involves at least `discovered` such publishers.
 
+With markets, the templates over a product type (q01, q03, q04, q14, q16) take their types in turns by spread: a type of one market, of two, of all, and again. Their instances so touch one market, two or all of them; q04's second type is one available where the first is. `analysis.json` reports `markets_in_answer` and `markets_touched` (the global brands not counted).
+
 Delegation gains are reported, not selected on: for every service sub-query in the answer, the matches of its patterns one by one divided by the solutions of the sub-query as a whole.
 
 The numbers below are from the full config before the 40,000-product catalog, the layouts and the publisher patterns; they are to be rebuilt.
@@ -226,6 +235,7 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `brands.min_products` | 20 | same | publish | products of the smallest brand |
 | `brands.service_share` | 0.25 | same | publish | share of brands, largest first, with a service |
 | `brands.seed` | 42 | same | publish | product → brand assignment |
+| `brands.type_spread` | – | same | publish | with markets: shares of types available in 1, 2, … markets or `all`, e.g. `{1: 0.6, 2: 0.3, all: 0.1}` |
 | `members.shops` | 20 | 20 | members, publish | shops (`vendor0`…) |
 | `members.review_sites` | 20 | 20 | members, publish | review sites (`ratingsite0`…) |
 | `members.pool` | 20,000 | 200 | members, publish | the catalog's first products, which members deal in |
@@ -248,6 +258,11 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `links.brand_reviews` | `all` | same | publish | brand product → review pages |
 | `links.brand_listings` | false | same | publish | the brand states `<listing> fs:listingOf <product>` for every listing of its products |
 | `links.seed` | 42 | same | publish | peers per listing |
+| `markets.count` | 1 (none) | same | members, publish | markets; members deal in `members.pool / count` products (a change needs `members --force`) |
+| `markets.countries` | – | same | publish | one list of country codes per market |
+| `markets.global_brands` | 0 | same | publish | largest brands sold in every market |
+| `markets.global_share` | 0 | same | publish | share of a market's pool from the global brands |
+| `markets.seed` | 42 | same | publish | pools' order, countries, types' markets |
 | `virtuoso.compose_file` | `discovery/docker/virtuoso.yml` | same | load, and steps that start Virtuoso | |
 | `virtuoso.container` | `fedshop-discovery-virtuoso` | same | load, serve | every graph (analysis) and the discovered services |
 | `virtuoso.isql_port` / `http_port` | 1112 / 8891 | same | load, build-workload, check | |
@@ -313,6 +328,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 | `publishers.json` | every publisher: kind, known or not, layout (shops, review sites and brands), storage, graph file, service and endpoint, triples |
 | `layout/` | the fragmenter run that rewrote the product pages' IRIs: its config, input and output; generation only |
 | `links.tsv` | every link: product, publisher, from, peer, to, via (`seeAlso`, or the brand's `listingOf`) |
+| `markets.json` | every publisher's market and every product type's markets |
 | `placements.nq` | triples placed in another document than their subject's, with that document as graph |
 | `categories.json` | every product type and the brands with a category page for it |
 | `web/` | the documents CSS serves, by URL path (not split: IRIs don't tell known from discoverable) |
@@ -329,6 +345,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **Own generation.** The benchmark runs FedShop's templates itself, with seeded offer and review counts. Shops and review sites have FedShop's full per-member rates, but there are 20 of each (FedShop's batch 1) instead of FedShop's 100.
 - **A smaller pool, a larger catalog.** Shops and review sites deal in 20,000 products instead of FedShop's 200,000, which keeps about 1 offer and 5 reviews per product with 20 members of each kind. Brands publish 40,000 products, half of them sold nowhere.
 - **New brands.** Products are given to 400 brands by a Zipf distribution, instead of FedShop's producer assignment. WatDiv only writes the producer records its own draws use, so a brand without one borrows another's properties.
+- **Markets** (when on). Members deal in their market's products and records get their market's countries, instead of FedShop's single pool and independently drawn countries. With `brands.type_spread`, product types are no longer WatDiv's independent draw: they are redrawn from the types available in the brand's market.
 - **Links and category pages are new.** FedShop has no links between members and no documents.
 - **IRIs.** All IRIs move under `http://localhost:3000/<publisher>/`, and entities get hash IRIs (`<document>#it`), apart from their documents; countries move into the taxonomy. Offers and reviews of product pages become `<listing>#Offer7`.
 - **Identifiers.** Offers and reviews gain `dcterms:identifier` with their FedShop local name.
