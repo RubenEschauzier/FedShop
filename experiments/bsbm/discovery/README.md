@@ -340,7 +340,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 
 **Queries**
 - **Rewritten templates.** q01–q12 are rewritten: `?local owl:sameAs <global>` becomes `?listing fs:listingOf <product>`, specification patterns move to the brand's product, and the known part goes in `SERVICE` clauses.
-- **Tied to what shops sell.** q01, q03 and q04 also require the product to be offered by some shop, and q06 to be offered by my shop.
+- **Tied to what shops sell.** q01, q03 and q04 also require the product to be offered by some shop, and q06 to be offered by my shop. q06 names my shop's vendor record as a constant (`?offer bsbm:vendor <vendor13/Vendor13#it>`), so its plain form has a document to start from.
 - **Features.** In this data a product's features are independent of its types, so a type plus two or three features leaves at most one product. q01 and q04 select by type and numeric bounds instead, q03 keeps one feature (as the one to lack), and q05 asks for the same type instead of a shared feature. Its windows are ±120 and ±170 instead of ±20 and ±70.
 - **q07** is FedShop's q07 with `fs:listingOf` for `owl:sameAs`, its offers part in `SERVICE` on my shop, which is a US shop so that FedShop's fixed US applies to it; `currentDate` is chosen as FedShop chooses it, below the end of validity of one of my shop's offers. As in FedShop, its products have offers, so both `OPTIONAL`s match; **q10** is FedShop's q10 with `fs:listingOf` for `owl:sameAs` and the US as `{{Country}}`; it names no shop, so it has no `SERVICE`, and `currentDate` is chosen the same way, below the end of validity of one of its offers.
 - **q09** also asks for the reviewer's name and country, so it crosses into the reviewer's storage.

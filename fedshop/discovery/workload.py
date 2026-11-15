@@ -111,6 +111,8 @@ class Values:
             "SELECT ?r (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?x bsbm:rating1 ?r } } GROUP BY ?r")}
         reviews = sum(self.review_count.values())
         self.rating_share = {r: sum(n for k, n in ratings.items() if k >= r) / reviews for r in range(1, 11)}
+        self.vendor_record = {publisher_of(dconf, r["g"]): r["v"]   # shop -> its vendor record
+                              for r in self.rows("SELECT ?g ?v WHERE { GRAPH ?g { ?v rdf:type bsbm:Vendor } }")}
 
     def rows(self, query):
         return sparql_csv(self.endpoint, PREFIXES + "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n"
@@ -190,7 +192,7 @@ def candidates(values, query, rng, limit, meta):
             grams = Counter(g for l in labels for g in {l[i:i + 3] for i in range(len(l) - 2)} if g.isalpha())
             fitting = sorted(g for g, n in grams.items() if lo <= n <= hi)
             if fitting:
-                yield {"Shop": values.endpoint_of(shop), "word": rng.choice(fitting)}
+                yield {"Shop": values.endpoint_of(shop), "Vendor": values.vendor_record[shop], "word": rng.choice(fitting)}
     elif query == "q07":
         # FedShop's q07 asks for offers from vendors in the US, so my shop is one of them
         us_shops = [shop for shop in values.shops if values.country.get(shop) == values.us]

@@ -8,6 +8,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX fs: <http://fedshop.example.org/vocab#>
 
 # FedShop q06: products whose label contains a word, among those my shop offers.
+# My shop's vendor record is a constant, so the plain form (without SERVICE) has a document to start from.
 # kind: analytical
 # rows: 10-200
 # discovered: 2
@@ -16,7 +17,7 @@ SELECT DISTINCT ?product ?label ?price WHERE {
         ?listing fs:listingOf ?product .
         ?offer bsbm:product ?listing .
         ?offer bsbm:price ?price .
-        ?offer bsbm:vendor ?vendor .
+        ?offer bsbm:vendor <{{Vendor}}> .
     }
     ?product rdfs:label ?label .
     ?product bsbm:producer ?brand .
