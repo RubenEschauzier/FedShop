@@ -132,7 +132,7 @@ evaluation:
 discovery:
   workdir: "${generation.workdir}/benchmark/discovery-small"   # outputs; the full config uses benchmark/discovery
   base_url: "http://localhost:3000/"   # every publisher's storage is <base_url><publisher>/ (served by CSS)
-  known:                         # shops and review sites known up front, where the engine starts (the taxonomy always is)
+  known:                         # shops and review sites known up front, where the engine starts (the taxonomy never is: documents only)
     ratio: 0.5                   # stratified over shops and review sites
     seed: 42
   layout:                        # how publishers group their entities into documents (every IRI resolves to its document)

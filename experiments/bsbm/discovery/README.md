@@ -1,6 +1,6 @@
 # Discovery-based FedShop
 
-A marketplace built from FedShop's data and published as Linked Data: shops, review sites, brands, a taxonomy and reviewers each publish their data as documents, and many of them also run a SPARQL endpoint. A query engine starts from the query services it knows up front and has to discover the rest through references in the data.
+A marketplace built from FedShop's data and published as Linked Data: shops, review sites, brands, a taxonomy and reviewers each publish their data as documents, and many of them also run a SPARQL endpoint (the taxonomy and reviewers never do). A query engine starts from the query services it knows up front and has to discover the rest through references in the data.
 
 ## Publishers
 
@@ -82,7 +82,7 @@ Every request is counted by source and by kind:
 `GET /stats` gives the counts since the last reset: `total`, `known_sources`, `discovered_sources` and `other`, each with requests, bytes and errors per kind, plus counts per publisher. So requests to known sources against discovered ones are `known_sources.requests` and `discovered_sources.requests`, and the discovery work itself (documents and storage roots) against querying (`sparql`) is the split by kind.
 
 ```bash
-curl -X POST localhost:3999/reset -d '{"label": "q07-2", "known": ["vendor13", "taxonomy"]}'   # before an instance
+curl -X POST localhost:3999/reset -d '{"label": "q07-2", "known": ["vendor13", "ratingsite2"]}'   # before an instance
 curl localhost:3999/stats                                                                     # after it
 ```
 
@@ -103,14 +103,14 @@ For each: `cpu_seconds` and `cpu_percent.avg` are exact, from the CPU counters r
 
 ## How an engine finds things
 
-An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (known publishers: the taxonomy and half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
+An engine is given a query. Its `SERVICE` clauses name the endpoints the user knows (known publishers: half of the shops and review sites). The engine gets no list of endpoints and discovers the rest from the data:
 - **A publisher's record leads to its storage.** Its `pim:storage` names the storage root, which lists every document (`ldp:contains`) and names the service, if any. The templates reach the record of every entity they use: a product's `bsbm:producer`, an offer's `bsbm:vendor`, a review's `dc:publisher`, a review's `rev:reviewer`.
 - **Any IRI leads to its storage**, also without the record: dereference it at CSS and walk up to the storage root.
 - **A product leads to other members.** Through the `rdfs:seeAlso` links of reached listings, and of the brand itself, it leads to the other shops' and review sites' listings of that product.
 - **A listing leads to its offers, a review page to its reviews.** Through the repeated `bsbm:product` and `bsbm:reviewFor` triples, which match the queries' patterns.
 - **A reviewer leads to their reviews.** Their profile's `foaf:made` triples, for queries that ask for a reviewer's reviews.
 - **A brand leads to its products.** Its record's `bsbm:producer` triples match patterns like `?product bsbm:producer ?producer`.
-- **A type leads to its products.** The taxonomy's type links to the records of the brands that make it, and so to their storages.
+- **A type leads to its products.** The taxonomy's type links to the records of the brands that make it, and so to their storages. The taxonomy is a vocabulary published as documents only, without a service, so its types and features are always dereferenced.
 
 So an engine can answer a query either from documents alone, following links (up to every document of the publishers it reaches), or by finding the services and sending them sub-queries.
 
@@ -120,7 +120,7 @@ Templates in `queries/`, with `{{Name}}` placeholders. q01–q12 follow FedShop'
 
 **Publisher patterns.** Every template also asks for the publisher of each entity it uses from another storage (`?product bsbm:producer ?brand`, `?offer bsbm:vendor ?vendor`, `?review dc:publisher ?site`), as SolidBench's queries go through a person's profile. Every entity has exactly one publisher and these variables aren't projected, so the answers don't change; the patterns make a traversal engine reach each publisher's record, and so all of its documents.
 
-**Known and open parts.** The part of a query whose sources the user knows sits in `SERVICE` clauses on known publishers' endpoints (`{{Shop}}`, `{{Site}}`, `{{Taxonomy}}`), as in FedShop's reference source assignment (RSA) queries. The rest names no source: the engine has to find it, through documents and links or through the services of the publishers it discovers. Federation over the known part is therefore a few targeted requests, and the work that varies is discovery and delegation to discovered services.
+**Known and open parts.** The part of a query whose sources the user knows sits in `SERVICE` clauses on known publishers' endpoints (`{{Shop}}`, `{{Site}}`), as in FedShop's reference source assignment (RSA) queries. The rest names no source: the engine has to find it, through documents and links or through the services of the publishers it discovers. Federation over the known part is therefore a few targeted requests, and the work that varies is discovery and delegation to discovered services.
 
 | Query | Kind | Known part (`SERVICE`) | Open part |
 |---|---|---|---|
@@ -305,8 +305,8 @@ The benchmark has no runner of its own; runners live in their own project. What 
 |---|---|
 | `catalog/` | the WatDiv run for the product catalog (products, producers, types, features); generation only |
 | `members/` | the WatDiv runs for the shops and review sites; generation only |
-| `data/known/` | the known publishers' triples: `taxonomy.nt`, `shops/`, `review-sites/` |
-| `data/discoverable/` | the other publishers' triples: `shops/`, `review-sites/`, `producers/`, `reviewers/` |
+| `data/known/` | the known publishers' triples: `shops/`, `review-sites/` |
+| `data/discoverable/` | the other publishers' triples: `taxonomy.nt`, `shops/`, `review-sites/`, `producers/`, `reviewers/` |
 | `publishers.json` | every publisher: kind, known or not, layout (shops, review sites and brands), storage, graph file, service and endpoint, triples |
 | `layout/` | the fragmenter run that rewrote the product pages' IRIs: its config, input and output; generation only |
 | `links.tsv` | every link: product, publisher, from, peer, to |
@@ -332,7 +332,7 @@ The benchmark has no runner of its own; runners live in their own project. What 
 - **Literals.** Dates gain their time of day (FedShop's `"2008-04-22"^^xsd:dateTime` is not a valid dateTime) and prices become `xsd:decimal` instead of `xsd:double`, without trailing zeros (`"8325.70"` is written `"8325.7"`, as Virtuoso writes it). That way documents and Virtuoso write every triple the same way, and an engine that reads a triple from both gets one term.
 
 **Federation**
-- **Known sources in `SERVICE` clauses instead of a fixed federation.** Only part of the federation is known up front: the taxonomy and half of the shops and review sites. A query names the ones it uses in `SERVICE` clauses, as FedShop's RSA queries do; everything else is discovered.
+- **Known sources in `SERVICE` clauses instead of a fixed federation.** Only part of the federation is known up front: half of the shops and review sites. The taxonomy has no service and is reached through its documents. A query names the ones it uses in `SERVICE` clauses, as FedShop's RSA queries do; everything else is discovered.
 - **Documents next to services.** Every member publishes documents (CSS). Brands without a service and reviewers have documents only.
 - **One federation size per build.** The benchmark builds one federation in its own Virtuoso container, not FedShop's 10 growing batches and batch containers; a larger federation is another build with more members.
 - **Requests counted by source.** Like FedShop's proxy, the benchmark's proxy counts every engine's requests, and it also tells known from discovered sources and documents from services.

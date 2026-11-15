@@ -2,7 +2,7 @@
 
 Templates live in experiments/bsbm/discovery/queries with {{Name}} placeholders. The part of a
 query whose sources the user knows sits in SERVICE clauses on known publishers' endpoints ({{Shop}},
-{{Site}}, {{Taxonomy}}), as in FedShop's reference source assignment; the rest names no source and
+{{Site}}), as in FedShop's reference source assignment; the rest names no source and
 has to be discovered. Each template states in its header:
 
 - `kind`: lookup, product (one product across members), analytical, or control (answered by its
@@ -63,7 +63,6 @@ class Values:
         known = {n: i for n, i in publishers.items() if i["known"]}
         self.shops = sorted((n for n, i in known.items() if i["kind"] == "vendor"), key=number)
         self.sites = sorted((n for n, i in known.items() if i["kind"] == "ratingsite"), key=number)
-        self.taxonomy = publishers["taxonomy"]["endpoint"]
 
         self.offers_at = defaultdict(lambda: defaultdict(list))   # shop -> product -> offers
         self.offer_count = Counter()
@@ -180,7 +179,7 @@ def candidates(values, query, rng, limit, meta):
                        "y": threshold_above([values.num[p].get(2, 0) for p in values.of_type[other] & sold], half)}
     elif query == "q02":
         for product in shuffled(values.label)[:limit]:
-            yield {"Product": product, "Taxonomy": values.taxonomy}
+            yield {"Product": product}
     elif query == "q05":
         for product in shuffled(sold)[:limit]:
             if values.types[product] and len(values.num[product]) >= 2:

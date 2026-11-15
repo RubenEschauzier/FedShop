@@ -49,8 +49,8 @@ The taxonomy's product type links with rdfs:seeAlso to the records of the brands
 links are the taxonomy's own triples).
 
 Everything is written as one N-Triples file per publisher, with the IRIs the documents are served
-at (after the layout): data/known/ (the taxonomy, shops/, review-sites/) and data/discoverable/
-(shops/, review-sites/, producers/, reviewers/), as publishers.json's `file` says. Triples placed in a document
+at (after the layout): data/known/ (shops/, review-sites/) and data/discoverable/ (the taxonomy,
+shops/, review-sites/, producers/, reviewers/), as publishers.json's `file` says. Triples placed in a document
 other than their subject's (the copies above) are written to placements.nq, with that document as
 graph.
 """
@@ -329,7 +329,7 @@ class Publishing:
 
     def build_storages(self):
         """Every publisher's own record names its storage: `<record> pim:storage <storage>`, as a WebID
-        profile does. The taxonomy has no record; it is known up front."""
+        profile does. The taxonomy has no record."""
         for name in [n for n in self.data if n != "taxonomy"]:
             ns = self.dconf.ns(name)
             records = set()
@@ -402,7 +402,8 @@ class Publishing:
         """Every publisher: kind, known or not, service, layout (shops and review sites), storage, graph
         file, triples, port and endpoint."""
         dconf = self.dconf
-        publishers = {"taxonomy": {"kind": "taxonomy", "known": True, "service": True}}
+        # The taxonomy is a vocabulary published as documents only: no query service, and not known up front
+        publishers = {"taxonomy": {"kind": "taxonomy", "known": False, "service": False}}
         for m in self.members:
             publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": True, "layout": self.layouts[m]}
         for brand in range(self.catalog.count):

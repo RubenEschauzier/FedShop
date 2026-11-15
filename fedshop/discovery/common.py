@@ -133,7 +133,7 @@ GROUPS = {"vendor": "shops", "ratingsite": "review-sites", "producer": "producer
 
 def graph_file(name, info):
     """A publisher's graph file, relative to data/: known/ or discoverable/, then a directory per kind
-    (the taxonomy directly in known/). Only the files are split: IRIs don't tell known from discoverable."""
+    (the taxonomy directly in discoverable/). Only the files are split: IRIs don't tell known from discoverable."""
     side = "known" if info["known"] else "discoverable"
     return str(Path(side, f"{name}.nt") if info["kind"] == "taxonomy" else Path(side, GROUPS[info["kind"]], f"{name}.nt"))
 
