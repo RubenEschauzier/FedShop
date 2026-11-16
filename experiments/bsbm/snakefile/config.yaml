@@ -153,6 +153,10 @@ discovery:
     offers: 2000                 # FedShop's average offers per shop (normal_dist avg)
     reviews: 10000               # FedShop's average reviews per review site; reviewers = reviews / 20
     seed: 42
+  watdiv:                        # makes WatDiv's runs (catalog, members) reproducible (scripts/watdiv-seed.patch)
+    seed: 42                     # each run gets its own seed (this one and the run's name), for WatDiv and for
+                                 # the template parameters the generation config draws (omega_conf.py)
+    today: "2026-11-16"          # end of the date ranges the templates leave open (else the day of generation)
   brands:                        # producers publish their products; never known, always discovered
     products: 40000              # products in the catalog, over all brands (at least members.pool): 27 to 3,295 per brand
     count: 400

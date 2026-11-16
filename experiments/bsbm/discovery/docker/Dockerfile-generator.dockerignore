@@ -4,6 +4,7 @@
 !uv.lock
 !README.md
 !scripts/build-watdiv.sh
+!scripts/watdiv-seed.patch
 !fedshop/
 !experiments/bsbm/model/watdiv/
 !experiments/bsbm/snakefile/

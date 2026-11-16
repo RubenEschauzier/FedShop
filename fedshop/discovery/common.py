@@ -37,6 +37,7 @@ DEFAULTS = {
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
               "brand_listings": False, "seed": 42},
     "markets": {"count": 1, "countries": None, "global_brands": 0, "global_share": 0.0, "seed": 42},
+    "watdiv": {"seed": 42, "today": "2026-11-16"},
     "virtuoso": {"compose_file": None, "container": "fedshop-discovery-virtuoso", "isql_port": 1112,
                  "http_port": 8891, "known_container": "fedshop-discovery-virtuoso-known",
                  "known_isql_port": 1113, "known_http_port": 8892, "first_service_port": 34300,
@@ -79,6 +80,7 @@ class DiscoveryConfig:
         self.brands_conf = merged("brands")
         self.links_conf = merged("links")
         self.markets_conf = merged("markets")
+        self.watdiv_conf = merged("watdiv")
         self.virtuoso = merged("virtuoso")
         self.css = merged("css")
         self.proxy = merged("proxy")

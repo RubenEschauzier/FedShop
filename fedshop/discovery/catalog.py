@@ -31,6 +31,10 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
     reviews_per_reviewer  int  reviews per reviewer, on average             20
     seed           any    seed of each member's offer or review count       42
 - `dconf.markets_conf`: `discovery.markets` (only `count`, for the pool size; see markets.py)
+- `dconf.watdiv_conf`: `discovery.watdiv`, what makes WatDiv's runs reproducible (scripts/watdiv-seed.patch)
+    seed           any    seed of every WatDiv run and of its template      42
+                          parameters (each run's own: seed|run)
+    today          date   end of the date ranges the templates leave open   2026-11-16
 - `dconf.pool`: `discovery.members.pool`, products shops and review sites deal in     20000
 - `dconf.member_names`: vendor0..vendor<shops-1>, ratingsite0..ratingsite<review_sites-1>,
   from `discovery.members.shops` and `.review_sites`                                   20, 20
@@ -38,13 +42,16 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
 - `dconf.path(...)`: a path under <outdir> (`discovery.workdir`, default
   <generation.workdir>/benchmark/discovery), its parent directory created
 """
+import hashlib
 import math
+import os
 import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 from omegaconf import OmegaConf
 
 from ..utils import load_config
@@ -54,6 +61,26 @@ from .markets import pool_size
 
 def watdiv_dir(dconf):
     return dconf.path("catalog", "watdiv")
+
+
+def run_seed(dconf, run):
+    """A WatDiv run's own seed, derived from `watdiv.seed` and the run's name: one seed for every run
+    would give all members the same draws."""
+    return int.from_bytes(hashlib.sha256(f"{dconf.watdiv_conf['seed']}|{run}".encode()).digest()[:4], "big")
+
+
+def run_config(dconf, run):
+    """The FedShop config for a WatDiv run. Its resolvers (omega_conf.py) draw template parameters, such as
+    word counts and the number of features, from numpy's global generator, seeded here with the run's seed;
+    the caller saves it resolved, so these draws happen now."""
+    np.random.seed(run_seed(dconf, run))
+    return load_config(dconf.configfile)
+
+
+def watdiv_env(dconf, run):
+    """The environment of a WatDiv run: its seed, and the end of open date ranges, which WatDiv would
+    otherwise take from today's date."""
+    return {**os.environ, "WATDIV_SEED": str(run_seed(dconf, run)), "WATDIV_TODAY": str(dconf.watdiv_conf["today"])}
 
 
 def generate(dconf, force=False):
@@ -71,7 +98,7 @@ def generate(dconf, force=False):
                              "regenerate it with --force (types and features follow from the catalog size)")
         LOGGER.info(f"Product catalog already generated in {out}")
         return
-    conf = load_config(dconf.configfile)
+    conf = run_config(dconf, "product")
     params = conf.generation.schema.product.params
     params.product_n = int(dconf.brands_conf["products"])
     params.producer_n = int(dconf.brands_conf["count"])
@@ -79,7 +106,8 @@ def generate(dconf, force=False):
     configfile = dconf.path("catalog", "config.yaml")
     OmegaConf.save(conf, configfile, resolve=True)      # feature_n and type_n follow from product_n here
     LOGGER.info(f"Generating {params.product_n} products for {params.producer_n} brands with WatDiv...")
-    subprocess.run([sys.executable, "-m", "fedshop.generate", "generate", configfile, "product", str(out)], check=True)
+    subprocess.run([sys.executable, "-m", "fedshop.generate", "generate", configfile, "product", str(out)], check=True,
+                   env=watdiv_env(dconf, "product"))
 
 
 def fedshop_count(rng, avg, mu=3, sigma=1):
@@ -106,7 +134,7 @@ def generate_members(dconf, force=False):
             continue
         section = "vendor" if name.startswith("vendor") else "ratingsite"
         rng = random.Random(f"{conf['seed']}|{name}")
-        cfg = load_config(dconf.configfile)
+        cfg = run_config(dconf, name)
         schema = cfg.generation.schema[section]
         schema.params.product_n = pool_size(dconf)        # its market's pool (all of it without markets)
         if section == "vendor":
@@ -122,7 +150,7 @@ def generate_members(dconf, force=False):
         LOGGER.info(f"Generating {name} ({'offers' if section == 'vendor' else 'reviews'}: "
                     f"{schema.params.get('offer_n') or schema.params.get('review_n')})...")
         subprocess.run([sys.executable, "-m", "fedshop.generate", "generate", configfile, section, str(target),
-                        "--id", str(number)], check=True, stdout=subprocess.DEVNULL)
+                        "--id", str(number)], check=True, stdout=subprocess.DEVNULL, env=watdiv_env(dconf, name))
 
 
 def brand_sizes(n_products, count, zipf, min_products):
