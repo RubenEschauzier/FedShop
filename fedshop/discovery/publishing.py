@@ -186,6 +186,45 @@ def choose_layouts(dconf, names, known):
     return layouts
 
 
+SERVICE_KINDS = {"producer": "brands", "vendor": "shops", "ratingsite": "review_sites"}   # kind -> services key
+SIZE_FIELDS = {"producer": "products", "vendor": "offers", "ratingsite": "reviews"}      # what a publisher's size counts
+SELECTIONS = ("largest", "data")
+
+
+def choose_services(conf, sizes):
+    """The discoverable publishers that run a query service (`services`). The known shops and review
+    sites always do, the taxonomy and reviewers never, so they are not chosen here.
+
+    sizes: kind ("producer", "vendor", "ratingsite") -> {publisher: size}: a brand's products, a
+    discovered shop's offers, a discovered review site's reviews. Per kind, with `services.<key>` as share:
+    - select `largest`: the largest publishers (ties by number), round(share * their number) of them;
+    - select `data`: the publishers in a seeded random order (one order per kind), as many as it takes
+      for their sizes to reach share of the kind's total. A larger share takes a longer prefix of the
+      same order, so it keeps every service of a smaller share; it overshoots by less than one publisher.
+    """
+    select = conf.get("select", "largest")
+    if select not in SELECTIONS:
+        raise ValueError(f"services.select: {select!r} is not one of {', '.join(SELECTIONS)}")
+    chosen = set()
+    for kind, key in SERVICE_KINDS.items():
+        share = float(conf[key])
+        if not 0 <= share <= 1:
+            raise ValueError(f"services.{key}: {share} is not between 0 and 1")
+        group = sizes.get(kind, {})
+        names = sorted(group, key=number)
+        if select == "largest":
+            chosen.update(sorted(names, key=lambda n: (-group[n], number(n)))[:round(share * len(names))])
+        else:
+            random.Random(f"{conf.get('seed', 42)}|{key}").shuffle(names)
+            target, total = share * sum(group.values()), 0
+            for name in names:
+                if total >= target:
+                    break
+                chosen.add(name)
+                total += group[name]
+    return chosen
+
+
 class Publishing:
     """FedShop's catalog and members, restructured into publishers: build() fills every publisher's
     triples, the links and the placements, and returns publishers.json."""
@@ -211,6 +250,7 @@ class Publishing:
             raise ValueError(f"layout.brands: {self.brands_layout!r} is neither {layout.PER_PRODUCT} nor {layout.BY_MONTH}")
         self.months = {}                       # product number -> publish month (by-month brands)
         self.review_day = {}                   # (site, local Review name) -> review date (by-day review sites)
+        self.entities = {}                     # member -> its offers or reviews
 
     # ----- IRIs -----
     def brand_name(self, brand):
@@ -328,6 +368,7 @@ class Publishing:
                     continue
                 obj = self.country_iri(market, member, o) if p == BSBM_COUNTRY else self.map_term(o)
                 self.data[member].append(nt(self.map_term(s), p, obj))
+            self.entities[member] = len(identified)
             for copy, n in sorted(copies.items(), key=lambda kv: kv[1]):
                 listing = self.map_term(copy)
                 self.listings[n][member] = listing[1:-1]
@@ -464,27 +505,39 @@ class Publishing:
 
     # ----- publishers.json -----
     def publishers(self):
-        """Every publisher: kind, known or not, service, layout (shops and review sites), storage, graph
-        file, triples, port and endpoint."""
+        """Every publisher: kind, known or not, service, layout (shops, review sites and brands), size
+        (products, offers or reviews), storage, graph file, triples, port and endpoint.
+
+        Known shops and review sites run a service, the taxonomy and reviewers don't, and the others are
+        chosen by `services` (choose_services). Every shop, review site and brand has its own port, also
+        without a service, so an endpoint's URL doesn't depend on which other publishers run one."""
         dconf = self.dconf
         # The taxonomy is a vocabulary published as documents only: no query service, and not known up front
         publishers = {"taxonomy": {"kind": "taxonomy", "known": False, "service": False}}
         for m in self.members:
-            publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": True, "layout": self.layouts[m]}
+            publishers[m] = {"kind": kind_of(m), "known": m in self.known, "service": None, "layout": self.layouts[m],
+                             SIZE_FIELDS[kind_of(m)]: self.entities[m]}
         for brand in range(self.catalog.count):
-            publishers[self.brand_name(brand)] = {"kind": "producer", "known": False,
-                                              "service": brand in self.catalog.services,
-                                              "products": self.catalog.sizes[brand], "layout": self.brands_layout}
+            publishers[self.brand_name(brand)] = {"kind": "producer", "known": False, "service": None,
+                                                  "products": self.catalog.sizes[brand], "layout": self.brands_layout}
         for r in self.reviewers:
             publishers[r] = {"kind": "reviewer", "known": False, "service": False}
+        sizes = defaultdict(dict)
+        for name, info in publishers.items():
+            if info["kind"] in SERVICE_KINDS and not info["known"]:
+                sizes[info["kind"]][name] = info[SIZE_FIELDS[info["kind"]]]
+        services = choose_services(dconf.services_conf, sizes)
         port = int(dconf.virtuoso["first_service_port"])
         for name, info in publishers.items():
+            if info["kind"] in SERVICE_KINDS:
+                info["service"] = info["known"] or name in services
             info["storage"] = dconf.ns(name)
             info["file"] = graph_file(name, info)
             info["triples"] = len(self.data[name])
             if info["service"]:
                 info["port"] = port
                 info["endpoint"] = f"http://{dconf.public_host}:{port}/{name}/sparql"
+            if info["kind"] in SERVICE_KINDS:
                 port += 1
         return publishers
 

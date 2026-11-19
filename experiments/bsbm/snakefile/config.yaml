@@ -162,8 +162,16 @@ discovery:
     count: 400
     zipf: 0.8                    # brand size ~ rank^-zipf: a few big brands, a moderate long tail
     min_products: 20
-    service_share: 0.25          # the largest brands (this share) run a query service; the rest is lookup-only
     seed: 42
+  services:                      # which discoverable publishers run a query service; known shops and review sites
+                                 # always do, the taxonomy and reviewers never
+    select: largest              # largest: the largest publishers of a kind, this share of their number;
+                                 # data: publishers in a seeded random order until they hold this share of the
+                                 #   kind's data (a larger share keeps every service of a smaller one)
+    brands: 0.25                 # brands; their size is their products
+    shops: 1.0                   # discovered shops; their size is their offers
+    review_sites: 1.0            # discovered review sites; their size is their reviews
+    seed: 42                     # the order of select: data
   links:                         # rdfs:seeAlso between listings of the same product: peers per listing, or "all"
     reviews: 2                   # shop listing -> review site pages
     where_to_buy: 3              # review site page -> shop listings

@@ -32,8 +32,8 @@ DEFAULTS = {
                "dataset_links": False, "seed": 42},
     "members": {"shops": 20, "review_sites": 20, "pool": 20000, "offers": 2000, "reviews": 10000,
                 "reviews_per_reviewer": 20, "seed": 42},
-    "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "service_share": 0.25,
-               "type_spread": None, "seed": 42},
+    "brands": {"products": 200000, "count": 400, "zipf": 0.8, "min_products": 20, "type_spread": None, "seed": 42},
+    "services": {"select": "largest", "brands": 0.25, "shops": 1.0, "review_sites": 1.0, "seed": 42},
     "links": {"reviews": 2, "where_to_buy": 3, "also_reviewed": 0, "brand_where_to_buy": 2, "brand_reviews": "all",
               "brand_listings": False, "seed": 42},
     "markets": {"count": 1, "countries": None, "global_brands": 0, "global_share": 0.0, "seed": 42},
@@ -77,7 +77,10 @@ class DiscoveryConfig:
         self.members_conf = merged("members")
         self.known_conf = merged("known")
         self.layout_conf = merged("layout")
+        if "service_share" in (section.get("brands") or {}):
+            raise ValueError("brands.service_share is now services.brands (with services.select: largest)")
         self.brands_conf = merged("brands")
+        self.services_conf = merged("services")
         self.links_conf = merged("links")
         self.markets_conf = merged("markets")
         self.watdiv_conf = merged("watdiv")
