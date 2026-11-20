@@ -9,6 +9,18 @@
 //   publishers: {name: {kind, known}}              every publisher, and whether it is known up front
 //   control_port                                   control API
 //   monitor: {sample_ms, components: [{name, cgroup} or {name, pid}]}   what to measure (see below)
+//   log_query_chars                                how much of a query's text the request log keeps (default 4096)
+//
+// Request log, one JSON object per request, written when it finishes:
+//   label, method, url, publisher, kind, source   what was asked, and of whom
+//   t                                             epoch ms the proxy received it (and forwarded it: nothing waits)
+//   status, bytes, ms                             the answer, and ms until it ended
+//   headers_ms, first_byte_ms                     ms until the answer's headers and its first body byte (null if none):
+//                                                 how long the server took before it began to answer
+//   in_flight                                     requests to the same server (the Solid server or one Virtuoso
+//                                                 container) still open when this one arrived
+//   query_form, query, query_chars                SPARQL only: SELECT/CONSTRUCT/ASK/DESCRIBE, the query's text (cut
+//                                                 at log_query_chars) and its full length
 //
 // Control API on control_port:
 //   GET  /stats            the counts and resources since the last reset (?samples=1 adds every sample)
@@ -23,6 +35,13 @@ const { performance } = require("perf_hooks");
 
 const KINDS = ["document", "storage-root", "container", "server-root", "sparql"];
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"]);
+const DEFAULT_LOG_QUERY_CHARS = 4096;
+// A query body beyond this is not kept for the log (it is forwarded whole all the same)
+const MAX_LOGGED_BODY_BYTES = 1 << 20;
+// The keyword after the prologue (comments, BASE and PREFIX declarations)
+const QUERY_FORM = /^(?:\s|#[^\n]*\n|BASE\s*<[^>]*>|PREFIX\s+[^\s:]*:\s*<[^>]*>)*(SELECT|CONSTRUCT|ASK|DESCRIBE)\b/i;
+// Requests forwarded to each server and not finished yet, for the log's in_flight
+const openPerServer = new Map();
 
 function counter() {
   const c = { requests: 0, bytes: 0, errors: 0 };
@@ -141,10 +160,11 @@ class ComponentMonitor {
 // Request counts since the last reset, by source, kind and publisher. Every request is also written
 // to the log (if any), with the label at the time it finished.
 class RequestStats {
-  constructor(publishers, log) {
+  constructor(publishers, log, logQueryChars = DEFAULT_LOG_QUERY_CHARS) {
     this.publishers = publishers;
     this.defaultKnown = Object.keys(publishers).filter((name) => publishers[name].known);
     this.log = log;
+    this.logQueryChars = logQueryChars;
     this.reset();
   }
 
@@ -200,6 +220,28 @@ function documentKind(pathname) {
   return pathname.split("/").filter(Boolean).length === 1 ? "storage-root" : "container";
 }
 
+// The SPARQL query of a request (GET ?query=, a form-encoded POST or a sparql-query POST), described for the log
+function describeQuery(req, body, maxChars) {
+  let query = new URL(req.url, "http://x").searchParams.get("query");
+  if (query === null && body) {
+    const type = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    if (type === "application/sparql-query") {
+      query = body;
+    } else if (type === "application/x-www-form-urlencoded") {
+      query = new URLSearchParams(body).get("query");
+    }
+  }
+  if (query === null) {
+    return { query_form: null, query: null, query_chars: 0 };
+  }
+  const form = QUERY_FORM.exec(query);
+  return {
+    query_form: form ? form[1].toUpperCase() : null,
+    query: query.length > maxChars ? query.slice(0, maxChars) : query,
+    query_chars: query.length,
+  };
+}
+
 function withoutHop(headers) {
   const out = {};
   for (const [k, v] of Object.entries(headers)) {
@@ -210,7 +252,7 @@ function withoutHop(headers) {
   return out;
 }
 
-// Forwards a request to an upstream {host, port, agent, hostHeader?} as soon as it arrives, and records
+// Forwards a request to an upstream {server, host, port, agent, hostHeader?} as soon as it arrives, and records
 // it in stats once the response has ended, the upstream failed (502) or the client went away (499).
 function forward(req, res, upstream, entry, stats) {
   const began = Date.now();
@@ -218,6 +260,14 @@ function forward(req, res, upstream, entry, stats) {
   if (upstream.hostHeader) {
     headers.host = upstream.hostHeader;
   }
+  const inFlight = openPerServer.get(upstream.server) || 0;
+  openPerServer.set(upstream.server, inFlight + 1);
+  let headersMs = null;
+  let firstByteMs = null;
+  // The query is only read for the log, so without one a request costs nothing more than before
+  const keepQuery = entry.kind === "sparql" && Boolean(stats.log);
+  const body = [];
+  let bodyBytes = 0;
 
   let finished = false;
   const done = (status, bytes) => {
@@ -225,15 +275,41 @@ function forward(req, res, upstream, entry, stats) {
       return;
     }
     finished = true;
-    stats.record({ ...entry, t: began, status, bytes, ms: Date.now() - began });
+    openPerServer.set(upstream.server, openPerServer.get(upstream.server) - 1);
+    const record = { ...entry, t: began, status, bytes, ms: Date.now() - began,
+                     headers_ms: headersMs, first_byte_ms: firstByteMs, in_flight: inFlight };
+    if (!keepQuery) {
+      stats.record(record);
+      return;
+    }
+    // An upstream can fail before the client has sent all of its query: the entry waits for the rest
+    let written = false;
+    const write = () => {
+      if (!written) {
+        written = true;
+        stats.record({ ...record, ...describeQuery(req, Buffer.concat(body).toString("utf8"), stats.logQueryChars) });
+      }
+    };
+    if (req.readableEnded || req.destroyed) {
+      write();
+    } else {
+      req.once("end", write);
+      req.once("close", write);
+    }
   };
 
   const outgoing = http.request({
     host: upstream.host, port: upstream.port, method: req.method, path: req.url, headers, agent: upstream.agent,
   }, (up) => {
+    headersMs = Date.now() - began;
     res.writeHead(up.statusCode, withoutHop(up.headers));
     let bytes = 0;
-    up.on("data", (chunk) => { bytes += chunk.length; });
+    up.on("data", (chunk) => {
+      if (firstByteMs === null) {
+        firstByteMs = Date.now() - began;
+      }
+      bytes += chunk.length;
+    });
     up.on("end", () => done(up.statusCode, bytes));
     up.on("error", () => done(502, bytes));
     // An upstream that drops its answer midway would leave the client waiting on the rest of it, which never
@@ -264,6 +340,15 @@ function forward(req, res, upstream, entry, stats) {
     }
   });
   req.pipe(outgoing);
+  if (keepQuery) {
+    // A second reader beside the pipe: it sees the same chunks and holds nothing back
+    req.on("data", (chunk) => {
+      if (bodyBytes < MAX_LOGGED_BODY_BYTES) {
+        body.push(chunk);
+        bodyBytes += chunk.length;
+      }
+    });
+  }
 }
 
 // A server that never closes a client's connection itself. Node's default does so 5 s after it has handed
@@ -296,7 +381,7 @@ function health(map) {
 function main(mapPath, logPath) {
   const map = JSON.parse(fs.readFileSync(mapPath, "utf8"));
   const log = logPath ? fs.createWriteStream(logPath, { flags: "a" }) : null;
-  const stats = new RequestStats(map.publishers, log);
+  const stats = new RequestStats(map.publishers, log, map.log_query_chars ?? DEFAULT_LOG_QUERY_CHARS);
   const monitors = (map.monitor && map.monitor.components || []).map((c) =>
     new ComponentMonitor(c.name, c.cgroup ? () => readCgroup(c.cgroup) : () => readProcess(c.pid)));
   monitors.push(new ComponentMonitor("proxy", readSelf));
@@ -308,6 +393,7 @@ function main(mapPath, logPath) {
   }, (map.monitor && map.monitor.sample_ms) || 50);
 
   const documents = {
+    server: "documents",
     host: map.documents.host || "localhost",
     port: map.documents.target,
     agent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
@@ -322,6 +408,8 @@ function main(mapPath, logPath) {
 
   for (const service of map.services) {
     const upstream = {
+      // Every service on one Virtuoso host shares its server, and so its HTTP threads
+      server: `virtuoso:${service.host || "localhost"}`,
       host: service.host || "localhost",
       port: service.target,
       // A fresh connection per request, so no reused socket can have been dropped by Virtuoso.
@@ -386,4 +474,4 @@ if (require.main === module) {
   main(process.argv[2], process.argv[3]);
 }
 
-module.exports = { ComponentMonitor, RequestStats, documentKind };
+module.exports = { ComponentMonitor, RequestStats, describeQuery, documentKind };

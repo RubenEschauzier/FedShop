@@ -144,8 +144,13 @@ function documentEntry(pathname, publisher, kind, source, status = 200, bytes = 
 
 function serviceEntry(name, source, status = 200, bytes = `sparql:localhost:${services[name].port}`.length) {
   return { method: "POST", url: `http://localhost:${ports[name]}/${name}/sparql`, publisher: name, kind: "sparql",
-           source, status, bytes };
+           source, status, bytes, query_form: "ASK", query: "ASK{}", query_chars: 5 };
 }
+
+// The keys of a log entry, in order
+const LOG_KEYS = ["label", "method", "url", "publisher", "kind", "source", "t", "status", "bytes", "ms",
+                  "headers_ms", "first_byte_ms", "in_flight"];
+const QUERY_KEYS = ["query_form", "query", "query_chars"];
 
 function logEntries(label) {
   const lines = fs.readFileSync(logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
@@ -204,6 +209,7 @@ before(async () => {
       vendor3: { kind: "vendor", known: false },
     },
     control_port: ports.control,
+    log_query_chars: 64,
     monitor: {
       sample_ms: 20,
       components: [
@@ -316,12 +322,26 @@ test("counts and logs every request by source, kind and publisher", async () => 
 
   const log = logEntries("phase1");
   for (const entry of log) {
-    assert.deepEqual(Object.keys(entry),
-                     ["label", "method", "url", "publisher", "kind", "source", "t", "status", "bytes", "ms"]);
+    assert.deepEqual(Object.keys(entry), [...LOG_KEYS, ...entry.kind === "sparql" ? QUERY_KEYS : []]);
     assert.equal(typeof entry.t, "number");
     assert.ok(entry.ms >= 0);
+    assert.equal(typeof entry.in_flight, "number");
+    if (entry.status === 499 || (entry.status === 502 && entry.bytes === 0)) {
+      // No answer began
+      assert.deepEqual([entry.headers_ms, entry.first_byte_ms], [null, null]);
+    } else {
+      assert.ok(entry.headers_ms >= 0 && entry.headers_ms <= entry.first_byte_ms && entry.first_byte_ms <= entry.ms,
+                JSON.stringify(entry));
+    }
   }
-  const withoutTimes = log.map(({ t, ms, ...rest }) => rest);
+  // The query services answer after SERVICE_DELAY_MS, and that is when their first byte comes
+  for (const entry of log.filter((e) => e.kind === "sparql" && e.status === 200)) {
+    assert.ok(entry.first_byte_ms >= SERVICE_DELAY_MS - 5, JSON.stringify(entry));
+  }
+  // The three requests to vendor2 were sent at once, so they overlapped on its Virtuoso host (shared with vendor1)
+  assert.deepEqual(log.filter((e) => e.kind === "sparql" && e.status === 200).map((e) => e.in_flight).sort(),
+                   [0, 1, 2, 3]);
+  const withoutTimes = log.map(({ t, ms, headers_ms, first_byte_ms, in_flight, ...rest }) => rest);
   assert.deepEqual(withoutTimes.sort(byUrl), expected.map((e) => ({ label: "phase1", ...e })).sort(byUrl));
 
   const { body: stats } = await control("GET", "/stats");
@@ -331,6 +351,31 @@ test("counts and logs every request by source, kind and publisher", async () => 
   assert.equal("series" in stats.resources.endpoints, false);
   const { since, resources, ...counts } = stats;
   assert.deepEqual(counts, expectedCounts("phase1", ["vendor1"], expected));
+});
+
+test("logs the form and text of every SPARQL query, however it is sent", async () => {
+  await control("POST", "/reset", JSON.stringify({ label: "queries" }));
+  const construct = "PREFIX ex: <http://example.org/>\n# a comment\nCONSTRUCT { ?s ex:p ?o } WHERE { ?s ex:p ?o }";
+  const select = `SELECT * WHERE { ?s ?p ?o . ?o ?q ?r }${" ".repeat(100)}`;
+  await request(ports.vendor1, `/vendor1/sparql?query=${encodeURIComponent(construct)}`);
+  await request(ports.vendor1, "/vendor1/sparql", {
+    method: "POST", headers: { "content-type": "application/sparql-query" }, body: select,
+  });
+  await request(ports.vendor1, "/vendor1/sparql", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded; charset=utf-8" },
+    body: `query=${encodeURIComponent("describe <http://example.org/x>")}&default-graph-uri=g`,
+  });
+  await request(ports.vendor1, "/vendor1/sparql", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" });
+  await wait(50);
+
+  const logged = logEntries("queries").sort((a, b) => a.t - b.t || a.query_chars - b.query_chars)
+    .map(({ query_form, query, query_chars }) => ({ query_form, query, query_chars }));
+  assert.deepEqual(new Set(logged.map(JSON.stringify)), new Set([
+    { query_form: "CONSTRUCT", query: construct.slice(0, 64), query_chars: construct.length },
+    { query_form: "SELECT", query: select.slice(0, 64), query_chars: select.length },
+    { query_form: "DESCRIBE", query: "describe <http://example.org/x>", query_chars: 31 },
+    { query_form: null, query: null, query_chars: 0 },
+  ].map(JSON.stringify)));
 });
 
 test("POST /reset sets the label and the publishers counted as known", async () => {
