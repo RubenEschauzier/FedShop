@@ -396,7 +396,9 @@ function main(mapPath, logPath) {
     server: "documents",
     host: map.documents.host || "localhost",
     port: map.documents.target,
-    agent: new http.Agent({ keepAlive: true, maxSockets: 64 }),
+    // Connections are reused, but never limited: a cap would hold requests back in the proxy, out of sight of
+    // both the engine and the Solid server, and the proxy must only count
+    agent: new http.Agent({ keepAlive: true, maxSockets: Infinity }),
   };
   createServer((req, res) => {
     const pathname = new URL(req.url, "http://x").pathname;

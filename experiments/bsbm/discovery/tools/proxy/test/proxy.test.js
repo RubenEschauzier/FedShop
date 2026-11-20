@@ -170,6 +170,15 @@ before(async () => {
 
   documents = await listen((req, res) => {
     documents.seen.push({ url: req.url, headers: req.headers });
+    if (req.url.includes("/held/")) {
+      documents.held += 1;
+      documents.heldPeak = Math.max(documents.heldPeak, documents.held);
+      setTimeout(() => {
+        documents.held -= 1;
+        res.end("held");
+      }, 300);
+      return;
+    }
     if (req.url.endsWith("/slow")) {
       setTimeout(() => res.end("slow"), 2000);
       return;
@@ -189,6 +198,8 @@ before(async () => {
     res.end(`doc:${req.url}`);
   });
   documents.seen = [];
+  documents.held = 0;
+  documents.heldPeak = 0;
   services = { vendor1: await fakeService(), vendor2: await fakeService() };
   ports = {
     documents: await freePort(), vendor1: await freePort(), vendor2: await freePort(), vendor3: await freePort(),
@@ -413,6 +424,16 @@ test("the control API rejects a body that is not JSON and unknown routes", async
 
   const current = (await control("GET", "/stats")).body;
   assert.deepEqual([current.label, current.since], [previous.label, previous.since]);
+});
+
+test("document requests reach the Solid server all at once, however many there are", async () => {
+  await control("POST", "/reset", JSON.stringify({ label: "burst" }));
+  const n = 150;
+  await Promise.all(Array.from({ length: n }, (_, i) => request(ports.documents, `/vendor2/held/${i}`)));
+  assert.equal(documents.heldPeak, n);
+  await wait(50);
+  // Nothing waited in the proxy, so every one was open when the last arrived... or arrived while the others were
+  assert.equal(Math.max(...logEntries("burst").map((e) => e.in_flight)), n - 1);
 });
 
 test("a client that gives up on a query service holds up no later request", async () => {
