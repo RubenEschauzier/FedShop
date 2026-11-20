@@ -23,7 +23,6 @@ at least `min_products`, so a few brands are big and the long tail stays moderat
     count          int    brands (producers)                                400
     zipf           float  brand size ~ rank^-zipf                           0.8
     min_products   int    products of the smallest brand                    20
-    service_share  float  share of brands, largest first, with a service    0.25 (0: none)
     seed           any    seed of the product -> brand assignment           42
 - `dconf.members_conf`: `discovery.members`
     offers         number average offers per shop (normal_dist avg)         2000
@@ -185,8 +184,6 @@ class Catalog:
             for number in order[start:start + size]:
                 self.brand_of[number] = brand
             start += size
-        n_services = round(float(conf["service_share"]) * self.count)
-        self.services = set(range(n_services))
         self.dir = Path(watdiv_dir(dconf))
 
     def product(self, number):

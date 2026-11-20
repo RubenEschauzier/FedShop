@@ -7,9 +7,9 @@ A marketplace built from FedShop's data and published as Linked Data: shops, rev
 | Publisher | Publishes | Query service | Known up front | Full config | Small config |
 |---|---|---|---|---|---|
 | Taxonomy | product types, product features, countries, links to the brands' category pages | yes | yes | 1 (434,538 triples) | 1 |
-| Brand (producer) | its products and their specification, its own record | the largest brands (`brands.service_share`) | never | 400 (100 with a service), 27 to 3,295 products each | 40 (10) |
-| Shop (vendor) | its record, its offers, one listing per product it sells | yes | half (`known.ratio`) | 20, ≈14,600 triples each | 20, ≈155 each |
-| Review site | its record, its reviews, one page per product it reviews | yes | half | 20, ≈76,600 triples each | 20, ≈730 each |
+| Brand (producer) | its products and their specification, its own record | some (`services`): the largest quarter by default | never | 400 (100 with a service), 27 to 3,295 products each | 40 (10) |
+| Shop (vendor) | its record, its offers, one listing per product it sells | known: yes; discovered: `services.shops` (all by default) | half (`known.ratio`) | 20, ≈14,600 triples each | 20, ≈155 each |
+| Review site | its record, its reviews, one page per product it reviews | known: yes; discovered: `services.review_sites` (all by default) | half | 20, ≈76,600 triples each | 20, ≈730 each |
 | Reviewer | their profile | no | never | 9,277 | 87 |
 
 `config.yaml` is the benchmark: 20 shops and 20 review sites (FedShop's batch 1) at FedShop's full per-member rates. `config_small.yaml` uses FedShop's small rates for development.
@@ -233,9 +233,13 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `brands.count` | 400 | 40 | catalog, publish | brands (FedShop's `producer_n`) |
 | `brands.zipf` | 0.8 | same | publish | brand size ∝ rank^-zipf |
 | `brands.min_products` | 20 | same | publish | products of the smallest brand |
-| `brands.service_share` | 0.25 | same | publish | share of brands, largest first, with a service |
 | `brands.seed` | 42 | same | publish | product → brand assignment |
 | `brands.type_spread` | – | same | publish | with markets: shares of types available in 1, 2, … markets or `all`, e.g. `{1: 0.6, 2: 0.3, all: 0.1}` |
+| `services.select` | `largest` | same | publish | how the discoverable brands, shops and review sites with a service are chosen, per kind. `largest`: the largest ones (by products, offers or reviews), the share of their number. `data`: in a seeded random order, as many as it takes to hold the share of the kind's products, offers or reviews (overshooting by less than one publisher); a larger share keeps every service of a smaller one. Known shops and review sites always have a service, the taxonomy and reviewers never |
+| `services.brands` | 0.25 | same | publish | share of the brands (`largest`) or of their products (`data`) with a service |
+| `services.shops` | 1 | same | publish | share of the discovered shops, or of their offers, with a service |
+| `services.review_sites` | 1 | same | publish | share of the discovered review sites, or of their reviews, with a service |
+| `services.seed` | 42 | same | publish | the order of `data` (one per kind) |
 | `members.shops` | 20 | 20 | members, publish | shops (`vendor0`…) |
 | `members.review_sites` | 20 | 20 | members, publish | review sites (`ratingsite0`…) |
 | `members.pool` | 20,000 | 200 | members, publish | the catalog's first products, which members deal in |
@@ -272,7 +276,7 @@ Every parameter comes from the config's `discovery` section. These are the value
 | `virtuoso.external` | false | same | load, build-workload, check | the containers are run by someone else (jbr): steps only wait for them |
 | `virtuoso.host` / `known_host` | `localhost` / `localhost` | same | build-workload, check, serve | where the containers are reached |
 | `virtuoso.wait_timeout` | 600 | same | steps that start Virtuoso | seconds to wait for the containers |
-| `virtuoso.first_service_port` | 34300 | same | publish, load, serve | public port of the first query service; the rest follow |
+| `virtuoso.first_service_port` | 34300 | same | publish, load, serve | public port of the first shop, review site or brand; every one of them has its own port, also without a service, so an endpoint's URL doesn't depend on which others run one |
 | `css.port` / `css.config` | 3000 / `discovery/css-config.json` | same | serve | public port of the documents |
 | `proxy.port_offset` | 10000 | same | load, serve | the Solid server and the services listen on their public port + this |
 | `proxy.control_port` | 3999 | same | serve | `GET /stats`, `POST /reset` |
